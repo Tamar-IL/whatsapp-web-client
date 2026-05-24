@@ -1,0 +1,22 @@
+# Railway build configuration via Nixpacks.
+# Installs ffmpeg (required for voice message conversion) alongside Node.
+
+[phases.setup]
+nixPkgs = ["nodejs_20", "ffmpeg-full"]
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = [
+  "npm --workspace apps/backend run prisma:generate",
+  "npm --workspace apps/backend run build",
+  "npm --workspace apps/frontend run build"
+]
+
+[start]
+cmd = "npm --workspace apps/backend run start:prod"
+
+# Runtime envs that Nixpacks should preserve from Railway service config.
+[variables]
+NODE_ENV = "production"

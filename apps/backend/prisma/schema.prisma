@@ -1,0 +1,180 @@
+// Prisma schema for the WhatsApp Web client.
+// Read 01-spec-review.md before changing field shapes (rationale documented there).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===== Auth =====
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  totpSecret   String? // reserved for future 2FA
+
+  auditEvents AuditEvent[]
+
+  @@map("users")
+}
+
+// connect-pg-simple manages its own table (user_sessions) — no Prisma model needed.
+
+// ===== Contacts & Conversations =====
+
+model Contact {
+  id           String   @id @default(cuid())
+  phoneNumber  String   @unique // E.164, "+15551234567"
+  displayName  String?
+  profileName  String?
+  avatarUrl    String?
+  optOut       Boolean  @default(false) // §2.5 of spec
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  conversations Conversation[]
+
+  @@map("contacts")
+}
+
+model Conversation {
+  id                    String    @id @default(cuid())
+  contactId             String
+  twilioConversationSid String    @unique // Twilio Conversations API SID
+  lastMessageAt         DateTime?
+  lastInboundAt         DateTime? // 24h window basis (§7.3); null = window closed (§D1)
+  unreadCount           Int       @default(0)
+  isArchived            Boolean   @default(false)
+  isPinned              Boolean   @default(false)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  contact  Contact   @relation(fields: [contactId], references: [id])
+  messages Message[]
+
+  @@index([lastMessageAt(sort: Desc)])
+  @@index([isPinned, lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+// ===== Messages & Reactions =====
+
+enum MessageDirection {
+  inbound
+  outbound
+}
+
+enum MessageType {
+  text
+  image
+  video
+  document
+  audio
+  voice
+  location
+  reaction
+  system
+}
+
+// Inbound: received → read
+// Outbound: queued → sent → delivered → read | failed
+// Never downgrade (see deep-dive §2 monotonicity rule).
+enum MessageStatus {
+  queued
+  sent
+  delivered
+  read
+  failed
+  received
+}
+
+model Message {
+  id             String           @id @default(cuid())
+  conversationId String
+  twilioSid      String           @unique // upsert key for webhook idempotency
+  clientId       String? // optimistic UI reconciliation
+  direction      MessageDirection
+  type           MessageType      @default(text)
+  status         MessageStatus
+
+  body      String? // text content
+  mediaUrl  String? // internal reference (URL or storage key)
+  mediaMime String?
+  mediaSize Int? // bytes
+  mediaName String? // original filename
+  duration  Int? // seconds, for voice/video/audio
+
+  errorCode    String? // Twilio error_code on failure
+  errorMessage String?
+
+  sentAt    DateTime // Twilio DateSent — canonical for ordering (§D4)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // For reactions, points to the message being reacted to.
+  reactsToId String?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+  reactsTo     Message?     @relation("ReactsTo", fields: [reactsToId], references: [id])
+  reactions    Message[]    @relation("ReactsTo")
+
+  @@index([conversationId, sentAt(sort: Desc)])
+  @@index([conversationId, createdAt])
+  @@map("messages")
+}
+
+// ===== Templates =====
+
+model Template {
+  id            String   @id @default(cuid())
+  twilioContentSid String @unique
+  friendlyName  String
+  language      String   @default("en")
+  body          String // raw template body with {{1}}, {{2}} placeholders
+  variables     Json // [{ "name": "customer_name", "example": "John" }, ...]
+  category      String?
+  approved      Boolean  @default(false)
+  fetchedAt     DateTime @default(now())
+
+  @@map("templates")
+}
+
+// ===== Real-time outbox =====
+// Every state change writes one row inside the same transaction.
+// The realtime layer reads + broadcasts. Client stores lastEventId for reconnect resync.
+
+model OutboxEvent {
+  id             BigInt   @id @default(autoincrement())
+  kind           String // 'message.added' | 'message.updated' | 'conversation.updated' | ...
+  conversationId String?
+  payload        Json
+  createdAt      DateTime @default(now())
+
+  @@index([id])
+  @@index([createdAt])
+  @@map("outbox_events")
+}
+
+// ===== Audit (minimal) =====
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  userId    String?
+  kind      String // 'auth.login' | 'message.sent' | 'template.sent' | ...
+  payload   Json?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([kind, createdAt(sort: Desc)])
+  @@map("audit_events")
+}

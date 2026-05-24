@@ -1,0 +1,29 @@
+{
+  "name": "whatsapp-web-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web client for managing a WhatsApp Business number via Twilio.",
+  "workspaces": [
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=20.10.0",
+    "npm": ">=10.0.0"
+  },
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:*",
+    "dev:backend": "npm --workspace apps/backend run dev",
+    "dev:frontend": "npm --workspace apps/frontend run dev",
+    "build": "npm --workspace apps/backend run build && npm --workspace apps/frontend run build",
+    "start": "npm --workspace apps/backend run start",
+    "lint": "npm --workspaces --if-present run lint",
+    "typecheck": "npm --workspaces --if-present run typecheck",
+    "prisma:migrate": "npm --workspace apps/backend run prisma:migrate",
+    "prisma:studio": "npm --workspace apps/backend run prisma:studio",
+    "prisma:generate": "npm --workspace apps/backend run prisma:generate",
+    "hash-password": "npm --workspace apps/backend run hash-password"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5"
+  }
+}

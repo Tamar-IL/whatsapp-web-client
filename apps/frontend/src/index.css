@@ -1,0 +1,34 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* WhatsApp Web color palette from spec §5.2.
+   Exposed as CSS variables so a future dark theme can override them. */
+:root {
+  --c-brand-primary: #075E54;
+  --c-brand-action: #25D366;
+  --c-brand-link:   #128C7E;
+  --c-chat-bg:      #ECE5DD;
+  --c-bubble-out:   #DCF8C6;
+  --c-bubble-in:    #FFFFFF;
+  --c-list-bg:      #F0F2F5;
+  --c-text:         #111B21;
+  --c-text-muted:   #667781;
+  --c-check-read:   #53BDEB;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", Helvetica, Arial, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Subtle conversation-area texture (spec §5.2 mentions "plain or with a subtle texture") */
+.chat-canvas {
+  background-color: var(--c-chat-bg);
+}
