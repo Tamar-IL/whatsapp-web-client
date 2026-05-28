@@ -26,6 +26,7 @@ yarn-error.log*
 apps/*/dist/
 apps/*/build/
 apps/*/.cache/
+*.tsbuildinfo
 apps/backend/prisma/migrations/*/migration_lock.toml
 
 # Media uploads in dev

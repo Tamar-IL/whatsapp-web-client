@@ -5,7 +5,10 @@
 nixPkgs = ["nodejs_20", "ffmpeg-full"]
 
 [phases.install]
-cmds = ["npm ci"]
+# --include=dev forces devDependencies (tsc, vite, prisma) to install even when
+# NODE_ENV=production is present in the build environment. Without this the build
+# step fails with "tsc: not found".
+cmds = ["npm ci --include=dev"]
 
 [phases.build]
 cmds = [
