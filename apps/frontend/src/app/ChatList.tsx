@@ -1,12 +1,10 @@
 /**
- * Phase 3 ticket 3.6 — chat list.
+ * Chat list (Phase 3 ticket 3.6).
  *
- * Skeleton implementation: fetches /api/conversations and renders a placeholder
- * empty state. Re-fetches on realtime 'message.added' / 'conversation.added'
- * events so new conversations appear without a page refresh.
- *
- * Real list rendering (preview, time, unread count, sort, pin, client-side search)
- * is implemented incrementally in Phase 3.
+ * Fetches /api/conversations and renders the list. Re-fetches on realtime
+ * 'message.added' / 'conversation.added' / 'conversation.updated' events so new
+ * chats and unread counts update without a page refresh. Clicking a row selects
+ * the conversation (handled by the parent via onSelect).
  */
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api/client';
@@ -20,7 +18,17 @@ interface ConversationListItem {
   window: { open: boolean; closesAt: string | null };
 }
 
-export function ChatList() {
+function displayName(c: ConversationListItem): string {
+  return c.contact.displayName ?? c.contact.profileName ?? c.contact.phoneNumber;
+}
+
+export function ChatList({
+  selectedId,
+  onSelect,
+}: {
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
   const [items, setItems] = useState<ConversationListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { socket } = useRealtime();
@@ -35,9 +43,6 @@ export function ChatList() {
     load();
   }, [load]);
 
-  // Re-fetch when realtime tells us something changed. Phase 3 ticket 3.9 replaces
-  // this with a reducer that mutates local state in place — much smoother — but
-  // refetch-on-event is enough to prove the end-to-end flow works.
   useEffect(() => {
     if (!socket) return;
     const handler = () => load();
@@ -51,9 +56,7 @@ export function ChatList() {
     };
   }, [socket, load]);
 
-  if (error) {
-    return <div className="p-4 text-sm text-red-700">{error}</div>;
-  }
+  if (error) return <div className="p-4 text-sm text-red-700">{error}</div>;
 
   if (!items) {
     return (
@@ -79,24 +82,24 @@ export function ChatList() {
       {items.map((c) => (
         <li
           key={c.id}
-          className="cursor-pointer border-b border-gray-100 px-4 py-3 hover:bg-gray-50"
+          onClick={() => onSelect(c.id)}
+          className={
+            'cursor-pointer border-b border-gray-100 px-4 py-3 hover:bg-gray-50 ' +
+            (selectedId === c.id ? 'bg-gray-100' : '')
+          }
         >
           <div className="flex items-baseline justify-between">
-            <span className="font-medium text-ink">
-              {c.contact.displayName ?? c.contact.profileName ?? c.contact.phoneNumber}
-            </span>
+            <span className="truncate font-medium text-ink">{displayName(c)}</span>
             {c.lastMessageAt && (
-              <span className="text-xs text-ink-muted">
+              <span className="ml-2 shrink-0 text-xs text-ink-muted">
                 {new Date(c.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
           </div>
           <div className="flex items-center justify-between text-sm text-ink-muted">
-            <span className="truncate">
-              {c.window.open ? '24h window open' : 'Template required'}
-            </span>
+            <span className="truncate">{c.window.open ? '24h window open' : 'Template required'}</span>
             {c.unreadCount > 0 && (
-              <span className="ml-2 rounded-full bg-brand-action px-2 text-xs font-semibold text-white">
+              <span className="ml-2 shrink-0 rounded-full bg-brand-action px-2 text-xs font-semibold text-white">
                 {c.unreadCount}
               </span>
             )}

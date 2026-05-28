@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/api/client.ts","./src/app/appshell.tsx","./src/app/chatlist.tsx","./src/app/conversationview.tsx","./src/app/inputbar.tsx","./src/app/realtimeprovider.tsx","./src/auth/authcontext.tsx","./src/auth/loginpage.tsx"],"version":"5.9.3"}
