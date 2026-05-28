@@ -1,10 +1,9 @@
 /**
- * Input bar (Phase 3 ticket 3.8).
+ * Input bar (Phase 3 ticket 3.8) — WhatsApp-style.
  *
- * Multiline text field + send. Enter sends, Shift+Enter newline. On send, POSTs
- * to /api/messages and hands the resulting message back to the parent. If the
- * 24h window is closed the server returns 409 WINDOW_CLOSED — we disable input
- * and show the "template required" notice (template UI is Phase 6).
+ * Rounded pill text field + circular send button. Enter sends, Shift+Enter newline.
+ * The paperclip is a placeholder for file sending (Round 2). If the 24h window is
+ * closed the server returns 409 WINDOW_CLOSED — we show the template notice.
  */
 import { type FormEvent, type KeyboardEvent, useState } from 'react';
 import { api, ApiError } from '../api/client';
@@ -65,7 +64,7 @@ export function InputBar({
 
   if (!windowOpen) {
     return (
-      <div className="border-t border-gray-200 bg-chat-list px-4 py-3 text-center text-sm text-ink-muted">
+      <div className="border-t border-black/10 bg-[#f0f2f5] px-4 py-3 text-center text-sm text-ink-muted">
         The 24-hour window is closed. You can only reply with an approved template message.
         <span className="ml-1 italic">(Template sending — Phase 6.)</span>
       </div>
@@ -73,23 +72,41 @@ export function InputBar({
   }
 
   return (
-    <form onSubmit={send} className="border-t border-gray-200 bg-chat-list px-4 py-3">
-      {error && <div className="mb-2 text-sm text-red-600">{error}</div>}
+    <form onSubmit={send} className="bg-[#f0f2f5] px-4 py-3">
+      {error && <div className="mb-2 text-center text-sm text-red-600">{error}</div>}
       <div className="flex items-end gap-2">
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          rows={1}
-          placeholder="Type a message"
-          className="max-h-32 flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
-        />
+        {/* Attach (file sending — Round 2) */}
+        <button
+          type="button"
+          title="Attach a file (coming soon)"
+          className="mb-1 shrink-0 cursor-not-allowed text-xl text-ink-muted opacity-60"
+          disabled
+        >
+          📎
+        </button>
+
+        <div className="flex flex-1 items-end rounded-3xl bg-white px-4 py-2 shadow-sm">
+          <textarea
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={onKeyDown}
+            rows={1}
+            placeholder="Type a message"
+            className="max-h-32 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
+          />
+        </div>
+
         <button
           type="submit"
           disabled={sending || !text.trim()}
-          className="shrink-0 rounded-lg bg-brand-action px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+          title="Send"
+          className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-primary text-white transition hover:opacity-90 disabled:opacity-50"
         >
-          {sending ? 'Sending…' : 'Send'}
+          {sending ? '…' : (
+            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+          )}
         </button>
       </div>
     </form>

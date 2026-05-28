@@ -1,9 +1,8 @@
 /**
- * Conversation view (Phase 3 tickets 3.7-3.9).
+ * Conversation view (Phase 3 + media display).
  *
- * Loads messages for the selected conversation, renders bubbles (inbound left/white,
- * outbound right/green per spec §5.2), appends new messages from realtime events,
- * and includes the input bar to send replies. Marks the conversation read on open.
+ * Header (contact name, phone, 24h window badge), message bubbles (text + media),
+ * realtime append, mark-read on open, and the input bar.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
@@ -17,24 +16,50 @@ export interface ChatMessage {
   type: string;
   status: string;
   body: string | null;
+  mediaUrl?: string | null;
   mediaMime?: string | null;
+  mediaName?: string | null;
+  mediaSize?: number | null;
+  hasMedia?: boolean;
   sentAt: string;
+}
+
+interface ContactInfo {
+  id: string;
+  phoneNumber: string;
+  displayName: string | null;
+  profileName: string | null;
+}
+
+interface ConversationDetail {
+  id: string;
+  contact: ContactInfo;
+  window: { open: boolean; closesAt: string | null };
 }
 
 export function ConversationView({ conversationId }: { conversationId: string | null }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [windowOpen, setWindowOpen] = useState(true);
   const { socket } = useRealtime();
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Load messages + mark read when a conversation is opened.
   useEffect(() => {
     if (!conversationId) {
       setMessages([]);
+      setDetail(null);
       return;
     }
     setLoading(true);
+
+    api<{ conversation: ConversationDetail }>(`/api/conversations/${conversationId}`)
+      .then((r) => {
+        setDetail(r.conversation);
+        setWindowOpen(r.conversation.window.open);
+      })
+      .catch(() => setDetail(null));
+
     api<{ messages: ChatMessage[] }>(`/api/conversations/${conversationId}/messages`)
       .then((r) => setMessages(r.messages))
       .catch(() => setMessages([]))
@@ -43,25 +68,25 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => undefined);
   }, [conversationId]);
 
-  // Append realtime messages for this conversation (dedup by id).
   useEffect(() => {
     if (!socket || !conversationId) return;
     const onAdded = (data: { conversationId?: string; payload?: Record<string, unknown> }) => {
       if (data.conversationId !== conversationId || !data.payload) return;
-      const p = data.payload as unknown as ChatMessage & { messageId: string };
+      const p = data.payload as Record<string, unknown>;
       const incoming: ChatMessage = {
-        id: p.messageId,
-        clientId: p.clientId ?? null,
-        direction: p.direction,
-        type: p.type,
-        status: p.status,
-        body: p.body ?? null,
-        sentAt: p.sentAt,
+        id: String(p.messageId),
+        clientId: (p.clientId as string) ?? null,
+        direction: p.direction as 'inbound' | 'outbound',
+        type: String(p.type),
+        status: String(p.status),
+        body: (p.body as string) ?? null,
+        sentAt: String(p.sentAt),
+        // realtime payload omits media URL; reload covers media-heavy cases.
+        hasMedia: p.type !== 'text',
+        mediaUrl: p.type !== 'text' ? `/api/media/${String(p.messageId)}` : null,
+        mediaMime: (p.mediaMime as string) ?? null,
       };
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === incoming.id)) return prev;
-        return [...prev, incoming];
-      });
+      setMessages((prev) => (prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]));
     };
     const onUpdated = (data: { conversationId?: string; payload?: Record<string, unknown> }) => {
       if (data.conversationId !== conversationId || !data.payload) return;
@@ -76,7 +101,6 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     };
   }, [socket, conversationId]);
 
-  // Keep scrolled to the newest message.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -99,14 +123,44 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     );
   }
 
+  const title = detail
+    ? detail.contact.displayName ?? detail.contact.profileName ?? detail.contact.phoneNumber
+    : '…';
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex-1 overflow-y-auto px-6 py-4">
+      {/* Header */}
+      <header className="flex items-center justify-between border-b border-black/10 bg-[#f0f2f5] px-4 py-2.5">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-primary text-sm font-semibold text-white">
+            {title.slice(0, 1).toUpperCase()}
+          </div>
+          <div>
+            <div className="font-medium text-ink">{title}</div>
+            {detail && <div className="text-xs text-ink-muted">{detail.contact.phoneNumber}</div>}
+          </div>
+        </div>
+        {detail && (
+          <span
+            className={
+              'rounded-full px-2.5 py-1 text-xs font-medium ' +
+              (detail.window.open
+                ? 'bg-green-100 text-green-800'
+                : 'bg-gray-200 text-gray-600')
+            }
+          >
+            {detail.window.open ? '24h window open' : 'Template required'}
+          </span>
+        )}
+      </header>
+
+      {/* Messages */}
+      <div className="chat-canvas scroll-thin flex-1 overflow-y-auto px-6 py-4">
         {loading && <div className="text-center text-sm text-ink-muted">Loading…</div>}
         {!loading && messages.length === 0 && (
           <div className="text-center text-sm text-ink-muted">No messages yet.</div>
         )}
-        <div className="mx-auto flex max-w-3xl flex-col gap-1">
+        <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
           {messages.map((m) => (
             <Bubble key={m.id} message={m} />
           ))}
@@ -114,7 +168,12 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         </div>
       </div>
 
-      <InputBar conversationId={conversationId} windowOpen={windowOpen} onSent={handleSent} setWindowOpen={setWindowOpen} />
+      <InputBar
+        conversationId={conversationId}
+        windowOpen={windowOpen}
+        onSent={handleSent}
+        setWindowOpen={setWindowOpen}
+      />
     </div>
   );
 }
@@ -126,20 +185,71 @@ function Bubble({ message }: { message: ChatMessage }) {
     <div className={'flex ' + (outbound ? 'justify-end' : 'justify-start')}>
       <div
         className={
-          'max-w-[75%] rounded-lg px-3 py-2 text-sm shadow-sm ' +
-          (outbound ? 'bg-chat-out text-ink' : 'bg-chat-in text-ink')
+          'max-w-[75%] rounded-lg px-2.5 py-1.5 text-sm shadow-sm ' +
+          (outbound ? 'rounded-tr-none bg-chat-out' : 'rounded-tl-none bg-chat-in') +
+          ' text-ink'
         }
       >
-        {message.body && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
-        {!message.body && message.type !== 'text' && (
-          <div className="italic text-ink-muted">[{message.type}]</div>
+        {message.hasMedia && message.mediaUrl && (
+          <MediaContent message={message} />
         )}
-        <div className="mt-1 flex items-center justify-end gap-1 text-[10px] text-ink-muted">
+        {message.body && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
+        <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-ink-muted">
           <span>{time}</span>
           {outbound && <StatusTick status={message.status} />}
         </div>
       </div>
     </div>
+  );
+}
+
+function MediaContent({ message }: { message: ChatMessage }) {
+  const [failed, setFailed] = useState(false);
+  const url = message.mediaUrl!;
+  const mime = message.mediaMime ?? '';
+
+  if (failed) {
+    return (
+      <div className="mb-1 rounded bg-black/5 p-3 text-xs text-ink-muted">
+        <div>Media unavailable or still under review.</div>
+        <a href={`${url}?download=1`} className="text-brand-link underline" target="_blank" rel="noreferrer">
+          Try downloading
+        </a>
+      </div>
+    );
+  }
+
+  if (mime.startsWith('image/')) {
+    return (
+      <a href={`${url}?download=1`} target="_blank" rel="noreferrer">
+        <img
+          src={url}
+          alt="image"
+          onError={() => setFailed(true)}
+          className="mb-1 max-h-72 rounded object-cover"
+        />
+      </a>
+    );
+  }
+  if (mime.startsWith('video/')) {
+    return (
+      <video controls src={url} onError={() => setFailed(true)} className="mb-1 max-h-72 rounded" />
+    );
+  }
+  if (mime.startsWith('audio/')) {
+    return <audio controls src={url} onError={() => setFailed(true)} className="mb-1 w-56" />;
+  }
+  // document / other
+  return (
+    <a
+      href={`${url}?download=1`}
+      target="_blank"
+      rel="noreferrer"
+      className="mb-1 flex items-center gap-2 rounded bg-black/5 px-3 py-2 text-brand-link underline"
+    >
+      <span>📎</span>
+      <span>{message.mediaName ?? 'Download file'}</span>
+    </a>
   );
 }
 
@@ -151,5 +261,4 @@ function StatusTick({ status }: { status: string }) {
   return <span>·</span>;
 }
 
-// Re-export so InputBar consumers get the type.
 export type { ChatMessage as ConversationMessage };

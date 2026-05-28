@@ -8,8 +8,8 @@
   --c-brand-primary: #075E54;
   --c-brand-action: #25D366;
   --c-brand-link:   #128C7E;
-  --c-chat-bg:      #ECE5DD;
-  --c-bubble-out:   #DCF8C6;
+  --c-chat-bg:      #EFEAE2; /* WhatsApp light-mode wallpaper beige */
+  --c-bubble-out:   #D9FDD3; /* WhatsApp outgoing green */
   --c-bubble-in:    #FFFFFF;
   --c-list-bg:      #F0F2F5;
   --c-text:         #111B21;
@@ -28,7 +28,15 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Subtle conversation-area texture (spec §5.2 mentions "plain or with a subtle texture") */
+/* WhatsApp-style conversation wallpaper: warm beige + a faint doodle texture.
+   The SVG is a subtle, low-opacity pattern tiled across the canvas. */
 .chat-canvas {
   background-color: var(--c-chat-bg);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cg fill='none' stroke='%23000000' stroke-opacity='0.025' stroke-width='1.5'%3E%3Ccircle cx='20' cy='20' r='6'/%3E%3Cpath d='M52 14l8 8-8 8-8-8z'/%3E%3Cpath d='M10 56h12M16 50v12'/%3E%3Ccircle cx='60' cy='58' r='4'/%3E%3Cpath d='M40 40q6 -8 12 0'/%3E%3C/g%3E%3C/svg%3E");
+  background-repeat: repeat;
 }
+
+/* Thin, unobtrusive scrollbars in the chat areas */
+.scroll-thin::-webkit-scrollbar { width: 8px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 4px; }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }

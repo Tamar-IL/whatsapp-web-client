@@ -8,9 +8,7 @@ import { ApiError } from '../lib/errors';
 export const conversationsRouter = Router();
 
 /**
- * GET /api/conversations
- * Phase 3 ticket 3.1 — paginated list of conversations, sorted by last_message_at
- * desc with pinned first. Each entry includes window state for the chat list.
+ * GET /api/conversations — paginated list, pinned first then by last message.
  */
 conversationsRouter.get(
   '/',
@@ -44,15 +42,38 @@ conversationsRouter.get(
 );
 
 /**
- * GET /api/conversations/:id/messages
- * Phase 3 ticket 3.2 — reverse-chrono pagination via `before` cursor.
- *
- * Query params:
- *  - limit   (default 50, max 100)
- *  - before  ISO timestamp; returns messages with sentAt strictly less than this.
- *
- * Response is in chronological order (oldest → newest) so the client can append
- * to its existing list without flipping.
+ * GET /api/conversations/:id — single conversation detail (contact + window),
+ * used for the conversation header.
+ */
+conversationsRouter.get(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const id = req.params.id!;
+    const c = await prisma.conversation.findUnique({ where: { id }, include: { contact: true } });
+    if (!c) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found.');
+    res.json({
+      conversation: {
+        id: c.id,
+        contact: {
+          id: c.contact.id,
+          phoneNumber: c.contact.phoneNumber,
+          displayName: c.contact.displayName,
+          profileName: c.contact.profileName,
+          optOut: c.contact.optOut,
+        },
+        lastMessageAt: c.lastMessageAt,
+        unreadCount: c.unreadCount,
+        isPinned: c.isPinned,
+        isArchived: c.isArchived,
+        window: windowState(c.lastInboundAt),
+      },
+    });
+  }),
+);
+
+/**
+ * GET /api/conversations/:id/messages — reverse-chrono pagination via `before`.
+ * Response is chronological (oldest → newest).
  */
 conversationsRouter.get(
   '/:id/messages',
@@ -81,10 +102,11 @@ conversationsRouter.get(
         type: m.type,
         status: m.status,
         body: m.body,
-        mediaUrl: m.mediaUrl,
+        mediaUrl: m.mediaUrl ? `/api/media/${m.id}` : null,
         mediaMime: m.mediaMime,
         mediaName: m.mediaName,
         mediaSize: m.mediaSize,
+        hasMedia: Boolean(m.mediaUrl),
         errorCode: m.errorCode,
         errorMessage: m.errorMessage,
         sentAt: m.sentAt,
@@ -94,27 +116,18 @@ conversationsRouter.get(
 );
 
 /**
- * POST /api/conversations/:id/read
- * Phase 3 ticket 3.3 — zero unread_count and emit a realtime update.
+ * POST /api/conversations/:id/read — zero unread_count, emit realtime update.
  */
 conversationsRouter.post(
   '/:id/read',
   asyncHandler(async (req, res) => {
     const id = req.params.id!;
-
     const conv = await prisma.conversation.findUnique({ where: { id }, select: { id: true } });
     if (!conv) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found.');
 
     await withOutbox(async (tx, emit) => {
-      await tx.conversation.update({
-        where: { id },
-        data: { unreadCount: 0 },
-      });
-      await emit({
-        kind: 'conversation.updated',
-        conversationId: id,
-        payload: { unreadCount: 0 },
-      });
+      await tx.conversation.update({ where: { id }, data: { unreadCount: 0 } });
+      await emit({ kind: 'conversation.updated', conversationId: id, payload: { unreadCount: 0 } });
     });
 
     res.json({ ok: true });
