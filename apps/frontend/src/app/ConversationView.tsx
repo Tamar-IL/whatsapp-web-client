@@ -271,10 +271,10 @@ function Bubble({
           <button
             type="button"
             onClick={() => message.replyTo && onQuoteClick(message.replyTo.id)}
-            className="mb-1 block w-full rounded border-l-4 border-brand-action bg-black/[0.04] px-2 py-1 text-left text-xs hover:bg-black/[0.07]"
+            className="mb-1 block w-full rounded border-l-4 border-brand-link bg-brand-action/10 px-2 py-1 text-left text-xs hover:bg-brand-action/20"
             title="Go to the quoted message"
           >
-            <div className="font-medium text-brand-link">
+            <div className="font-medium text-brand-primary">
               {message.replyTo.direction === 'outbound' ? 'You' : 'Them'}
             </div>
             <div className="truncate text-ink-muted">

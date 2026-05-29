@@ -176,9 +176,9 @@ export function InputBar({
 
       {/* Replying-to bar */}
       {replyingTo && (
-        <div className="mb-2 flex items-center gap-2 rounded-lg border-l-4 border-brand-action bg-white px-3 py-2">
+        <div className="mb-2 flex items-center gap-2 rounded-lg border-l-4 border-brand-link bg-brand-action/10 px-3 py-2">
           <div className="min-w-0 flex-1">
-            <div className="text-xs font-medium text-brand-link">
+            <div className="text-xs font-medium text-brand-primary">
               Replying to {replyingTo.direction === 'outbound' ? 'yourself' : 'them'}
             </div>
             <div className="truncate text-sm text-ink-muted">
@@ -228,7 +228,7 @@ export function InputBar({
           onChange={onPickFile}
         />
 
-        {/* Pill containing the attach button + textarea (attach now lives inside) */}
+        {/* Pill containing attach + send (both left) + textarea */}
         <div className="flex flex-1 items-end gap-2 rounded-3xl border border-gray-300 bg-white px-3 py-2 shadow-sm focus-within:border-brand-primary focus-within:ring-1 focus-within:ring-brand-primary">
           <button
             type="button"
@@ -238,6 +238,21 @@ export function InputBar({
             className="shrink-0 text-xl leading-none text-ink-muted hover:text-brand-primary disabled:opacity-50"
           >
             📎
+          </button>
+          {/* Send — green icon only, no filled circle, next to attach */}
+          <button
+            type="submit"
+            disabled={!canSend}
+            title="Send"
+            className="shrink-0 leading-none text-brand-action transition hover:text-brand-primary disabled:opacity-40"
+          >
+            {sending ? (
+              <span className="text-sm">…</span>
+            ) : (
+              <svg viewBox="0 0 24 24" className="h-6 w-6 fill-current">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              </svg>
+            )}
           </button>
           <textarea
             ref={taRef}
@@ -249,19 +264,6 @@ export function InputBar({
             className="max-h-40 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
           />
         </div>
-
-        <button
-          type="submit"
-          disabled={!canSend}
-          title="Send"
-          className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-primary text-white transition hover:opacity-90 disabled:opacity-50"
-        >
-          {sending ? '…' : (
-            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
-              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-            </svg>
-          )}
-        </button>
       </div>
     </form>
   );
