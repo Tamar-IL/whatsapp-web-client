@@ -85,7 +85,7 @@ export function InputBar({
           📎
         </button>
 
-        <div className="flex flex-1 items-end rounded-3xl bg-white px-4 py-2 shadow-sm">
+        <div className="flex flex-1 items-end rounded-3xl border border-gray-300 bg-white px-4 py-2 shadow-sm focus-within:border-brand-primary focus-within:ring-1 focus-within:ring-brand-primary">
           <textarea
             value={text}
             onChange={(e) => setText(e.target.value)}

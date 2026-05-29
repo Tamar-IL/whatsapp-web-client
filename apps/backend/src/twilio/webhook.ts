@@ -158,6 +158,10 @@ async function handleInbound(
         status: message.status,
         body: message.body,
         sentAt: message.sentAt,
+        // Include media metadata so the client renders inline without a reload.
+        hasMedia: Boolean(message.mediaUrl),
+        mediaMime: message.mediaMime,
+        mediaName: message.mediaName,
       },
     });
   });

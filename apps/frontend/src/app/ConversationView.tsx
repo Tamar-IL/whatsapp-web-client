@@ -81,10 +81,10 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         status: String(p.status),
         body: (p.body as string) ?? null,
         sentAt: String(p.sentAt),
-        // realtime payload omits media URL; reload covers media-heavy cases.
-        hasMedia: p.type !== 'text',
+        hasMedia: Boolean(p.hasMedia) || p.type !== 'text',
         mediaUrl: p.type !== 'text' ? `/api/media/${String(p.messageId)}` : null,
         mediaMime: (p.mediaMime as string) ?? null,
+        mediaName: (p.mediaName as string) ?? null,
       };
       setMessages((prev) => (prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]));
     };
@@ -207,6 +207,14 @@ function MediaContent({ message }: { message: ChatMessage }) {
   const [failed, setFailed] = useState(false);
   const url = message.mediaUrl!;
   const mime = message.mediaMime ?? '';
+  const t = message.type;
+
+  // Branch on the message TYPE first (always present, even for realtime arrivals),
+  // falling back to the MIME string. This is why a newly-arrived image used to
+  // render as a download link — its MIME hadn't arrived yet over the socket.
+  const isImage = t === 'image' || mime.startsWith('image/');
+  const isVideo = t === 'video' || mime.startsWith('video/');
+  const isAudio = t === 'audio' || t === 'voice' || mime.startsWith('audio/');
 
   if (failed) {
     return (
@@ -219,25 +227,42 @@ function MediaContent({ message }: { message: ChatMessage }) {
     );
   }
 
-  if (mime.startsWith('image/')) {
+  if (isImage) {
+    // Click the image to VIEW it full-size in a new tab (no forced download).
+    // A separate small link handles downloading.
     return (
-      <a href={`${url}?download=1`} target="_blank" rel="noreferrer">
-        <img
-          src={url}
-          alt="image"
-          onError={() => setFailed(true)}
-          className="mb-1 max-h-72 rounded object-cover"
-        />
-      </a>
+      <div className="mb-1">
+        <a href={url} target="_blank" rel="noreferrer" title="Open full size">
+          <img
+            src={url}
+            alt="image"
+            onError={() => setFailed(true)}
+            className="max-h-72 cursor-pointer rounded object-cover"
+          />
+        </a>
+        <a
+          href={`${url}?download=1`}
+          className="mt-1 block text-[11px] text-brand-link underline"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Download
+        </a>
+      </div>
     );
   }
-  if (mime.startsWith('video/')) {
+  if (isVideo) {
     return (
       <video controls src={url} onError={() => setFailed(true)} className="mb-1 max-h-72 rounded" />
     );
   }
-  if (mime.startsWith('audio/')) {
-    return <audio controls src={url} onError={() => setFailed(true)} className="mb-1 w-56" />;
+  if (isAudio) {
+    return (
+      <div className="mb-1 flex flex-col gap-1">
+        <span className="text-[11px] text-ink-muted">🎤 Voice message</span>
+        <audio controls src={url} onError={() => setFailed(true)} className="w-60" />
+      </div>
+    );
   }
   // document / other
   return (
