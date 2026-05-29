@@ -195,17 +195,18 @@ export function InputBar({
           accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
           onChange={onPickFile}
         />
-        <button
-          type="button"
-          title="Attach a file"
-          onClick={() => fileRef.current?.click()}
-          disabled={sending}
-          className="mb-1 shrink-0 text-xl text-ink-muted hover:text-brand-primary disabled:opacity-50"
-        >
-          📎
-        </button>
 
-        <div className="flex flex-1 items-end rounded-3xl border border-gray-300 bg-white px-4 py-2 shadow-sm focus-within:border-brand-primary focus-within:ring-1 focus-within:ring-brand-primary">
+        {/* Pill containing the attach button + textarea (attach now lives inside) */}
+        <div className="flex flex-1 items-end gap-2 rounded-3xl border border-gray-300 bg-white px-3 py-2 shadow-sm focus-within:border-brand-primary focus-within:ring-1 focus-within:ring-brand-primary">
+          <button
+            type="button"
+            title="Attach a file"
+            onClick={() => fileRef.current?.click()}
+            disabled={sending}
+            className="shrink-0 text-xl leading-none text-ink-muted hover:text-brand-primary disabled:opacity-50"
+          >
+            📎
+          </button>
           <textarea
             ref={taRef}
             value={text}
