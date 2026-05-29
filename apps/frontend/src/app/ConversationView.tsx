@@ -23,7 +23,7 @@ export interface ChatMessage {
   mediaSize?: number | null;
   hasMedia?: boolean;
   sentAt: string;
-  replyTo?: { body: string | null; direction: string; type: string } | null;
+  replyTo?: { id: string; body: string | null; direction: string; type: string } | null;
 }
 
 interface ContactInfo {
@@ -45,8 +45,24 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   const [loading, setLoading] = useState(false);
   const [windowOpen, setWindowOpen] = useState(true);
   const [lightbox, setLightbox] = useState<string | null>(null);
+  const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const { socket } = useRealtime();
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  // Scroll to + briefly highlight a message (used when clicking a quote box).
+  const scrollToMessage = useCallback((id: string) => {
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightedId(id);
+    window.setTimeout(() => setHighlightedId((cur) => (cur === id ? null : cur)), 1600);
+  }, []);
+
+  // Reset reply state when switching conversations.
+  useEffect(() => {
+    setReplyingTo(null);
+  }, [conversationId]);
 
   useEffect(() => {
     if (!conversationId) {
@@ -166,7 +182,14 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
           {messages.map((m) => (
-            <Bubble key={m.id} message={m} onOpenImage={setLightbox} />
+            <Bubble
+              key={m.id}
+              message={m}
+              onOpenImage={setLightbox}
+              onReply={setReplyingTo}
+              onQuoteClick={scrollToMessage}
+              highlighted={highlightedId === m.id}
+            />
           ))}
           <div ref={bottomRef} />
         </div>
@@ -177,6 +200,8 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         windowOpen={windowOpen}
         onSent={handleSent}
         setWindowOpen={setWindowOpen}
+        replyingTo={replyingTo}
+        onCancelReply={() => setReplyingTo(null)}
       />
 
       {/* Image lightbox */}
@@ -213,27 +238,49 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   );
 }
 
-function Bubble({ message, onOpenImage }: { message: ChatMessage; onOpenImage: (url: string) => void }) {
+function Bubble({
+  message,
+  onOpenImage,
+  onReply,
+  onQuoteClick,
+  highlighted,
+}: {
+  message: ChatMessage;
+  onOpenImage: (url: string) => void;
+  onReply: (m: ChatMessage) => void;
+  onQuoteClick: (id: string) => void;
+  highlighted: boolean;
+}) {
   const outbound = message.direction === 'outbound';
   const time = new Date(message.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return (
-    <div className={'flex ' + (outbound ? 'justify-end' : 'justify-start')}>
+    <div id={`msg-${message.id}`} className={'group flex ' + (outbound ? 'justify-end' : 'justify-start')}>
+      {/* Reply action (left of outbound bubbles) */}
+      {outbound && (
+        <ReplyButton onClick={() => onReply(message)} />
+      )}
       <div
         className={
-          'max-w-[75%] rounded-lg px-2.5 py-1.5 text-sm shadow-sm ' +
+          'max-w-[75%] rounded-lg px-2.5 py-1.5 text-sm shadow-sm transition ' +
           (outbound ? 'rounded-tr-none bg-chat-out' : 'rounded-tl-none bg-chat-in') +
-          ' text-ink'
+          ' text-ink' +
+          (highlighted ? ' ring-2 ring-brand-action' : '')
         }
       >
         {message.replyTo && (
-          <div className="mb-1 rounded border-l-4 border-brand-action bg-black/[0.04] px-2 py-1 text-xs">
+          <button
+            type="button"
+            onClick={() => message.replyTo && onQuoteClick(message.replyTo.id)}
+            className="mb-1 block w-full rounded border-l-4 border-brand-action bg-black/[0.04] px-2 py-1 text-left text-xs hover:bg-black/[0.07]"
+            title="Go to the quoted message"
+          >
             <div className="font-medium text-brand-link">
               {message.replyTo.direction === 'outbound' ? 'You' : 'Them'}
             </div>
             <div className="truncate text-ink-muted">
               {message.replyTo.body ?? `[${message.replyTo.type}]`}
             </div>
-          </div>
+          </button>
         )}
         {message.hasMedia && message.mediaUrl && (
           <MediaContent message={message} onOpenImage={onOpenImage} />
@@ -244,7 +291,24 @@ function Bubble({ message, onOpenImage }: { message: ChatMessage; onOpenImage: (
           {outbound && <StatusTick status={message.status} />}
         </div>
       </div>
+      {/* Reply action (right of inbound bubbles) */}
+      {!outbound && <ReplyButton onClick={() => onReply(message)} />}
     </div>
+  );
+}
+
+function ReplyButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title="Reply"
+      className="mx-1 self-center text-ink-muted opacity-0 transition group-hover:opacity-100 hover:text-brand-primary"
+    >
+      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-current">
+        <path d="M10 9V5l-7 7 7 7v-4.1c5 0 8.5 1.6 11 5.1-1-5-4-10-11-11z" />
+      </svg>
+    </button>
   );
 }
 

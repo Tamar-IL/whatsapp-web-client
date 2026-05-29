@@ -143,13 +143,15 @@ async function handleInbound(
     // Quoted reply: WhatsApp sends OriginalRepliedMessageSid when the customer
     // replies to a specific message. Store the ref + resolve a snippet to show.
     const replyToSid = p.OriginalRepliedMessageSid || null;
-    let replyTo: { body: string | null; direction: string; type: string } | null = null;
+    let replyTo: { id: string; body: string | null; direction: string; type: string } | null = null;
     if (replyToSid) {
       const quoted = await tx.message.findUnique({
         where: { twilioSid: replyToSid },
-        select: { body: true, direction: true, type: true },
+        select: { id: true, body: true, direction: true, type: true },
       });
-      if (quoted) replyTo = { body: quoted.body, direction: quoted.direction, type: quoted.type };
+      if (quoted) {
+        replyTo = { id: quoted.id, body: quoted.body, direction: quoted.direction, type: quoted.type };
+      }
     }
 
     const message = await tx.message.create({

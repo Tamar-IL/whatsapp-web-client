@@ -38,6 +38,7 @@ const sendTextSchema = z.object({
   conversationId: z.string().min(1),
   body: z.string().min(1).max(4096),
   clientId: z.string().min(1).max(64),
+  replyToId: z.string().optional(), // id of the message being replied to (quoted)
 });
 
 /**
@@ -62,6 +63,20 @@ messagesRouter.post(
 
     if (!windowState(conv.lastInboundAt).open) {
       throw new ApiError(409, 'WINDOW_CLOSED', new WindowClosedError().message);
+    }
+
+    // Resolve the message being replied to (for quoted-reply threading in our UI).
+    let replyToTwilioSid: string | null = null;
+    let replyToSnippet: { id: string; body: string | null; direction: string; type: string } | null = null;
+    if (parsed.data.replyToId) {
+      const target = await prisma.message.findFirst({
+        where: { id: parsed.data.replyToId, conversationId: conv.id },
+        select: { id: true, twilioSid: true, body: true, direction: true, type: true },
+      });
+      if (target) {
+        replyToTwilioSid = target.twilioSid;
+        replyToSnippet = { id: target.id, body: target.body, direction: target.direction, type: target.type };
+      }
     }
 
     const statusCallbackUrl = `${env.PUBLIC_BASE_URL}/webhooks/twilio/status`;
@@ -90,6 +105,7 @@ messagesRouter.post(
           type: 'text',
           status: 'sent',
           body: parsed.data.body,
+          replyToTwilioSid,
           sentAt: now,
         },
       });
@@ -108,6 +124,7 @@ messagesRouter.post(
           status: m.status,
           body: m.body,
           sentAt: m.sentAt,
+          replyTo: replyToSnippet,
         },
       });
       return m;
@@ -127,6 +144,7 @@ messagesRouter.post(
         status: message.status,
         body: message.body,
         sentAt: message.sentAt,
+        replyTo: replyToSnippet,
       },
     });
   }),

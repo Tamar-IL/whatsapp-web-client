@@ -19,11 +19,15 @@ export function InputBar({
   windowOpen,
   onSent,
   setWindowOpen,
+  replyingTo,
+  onCancelReply,
 }: {
   conversationId: string;
   windowOpen: boolean;
   onSent: (m: ChatMessage) => void;
   setWindowOpen: (open: boolean) => void;
+  replyingTo: ChatMessage | null;
+  onCancelReply: () => void;
 }) {
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
@@ -130,11 +134,17 @@ export function InputBar({
     try {
       const { message } = await api<{ message: ChatMessage }>('/api/messages', {
         method: 'POST',
-        body: { conversationId, body, clientId: newClientId() },
+        body: {
+          conversationId,
+          body,
+          clientId: newClientId(),
+          ...(replyingTo ? { replyToId: replyingTo.id } : {}),
+        },
       });
       onSent(message);
       setText('');
       resetHeight();
+      onCancelReply();
     } catch (err) {
       handleApiError(err, 'Could not send. Please try again.');
     } finally {
@@ -163,6 +173,28 @@ export function InputBar({
   return (
     <form onSubmit={send} className="bg-[#f0f2f5] px-4 py-3">
       {error && <div className="mb-2 text-center text-sm text-red-600">{error}</div>}
+
+      {/* Replying-to bar */}
+      {replyingTo && (
+        <div className="mb-2 flex items-center gap-2 rounded-lg border-l-4 border-brand-action bg-white px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-xs font-medium text-brand-link">
+              Replying to {replyingTo.direction === 'outbound' ? 'yourself' : 'them'}
+            </div>
+            <div className="truncate text-sm text-ink-muted">
+              {replyingTo.body ?? `[${replyingTo.type}]`}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onCancelReply}
+            className="shrink-0 rounded-full px-2 text-lg text-ink-muted hover:text-red-600"
+            title="Cancel reply"
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       {/* Staged file preview */}
       {staged && (

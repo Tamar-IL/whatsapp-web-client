@@ -101,7 +101,7 @@ conversationsRouter.get(
     const quotedRows = replySids.length
       ? await prisma.message.findMany({
           where: { twilioSid: { in: replySids } },
-          select: { twilioSid: true, body: true, direction: true, type: true },
+          select: { id: true, twilioSid: true, body: true, direction: true, type: true },
         })
       : [];
     const quotedMap = new Map(quotedRows.map((q) => [q.twilioSid, q]));
@@ -125,7 +125,7 @@ conversationsRouter.get(
           errorMessage: m.errorMessage,
           sentAt: m.sentAt,
           replyTo: quoted
-            ? { body: quoted.body, direction: quoted.direction, type: quoted.type }
+            ? { id: quoted.id, body: quoted.body, direction: quoted.direction, type: quoted.type }
             : null,
         };
       }),
