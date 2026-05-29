@@ -5,8 +5,8 @@
  * The paperclip is a placeholder for file sending (Round 2). If the 24h window is
  * closed the server returns 409 WINDOW_CLOSED — we show the template notice.
  */
-import { type FormEvent, type KeyboardEvent, useState } from 'react';
-import { api, ApiError } from '../api/client';
+import { type ChangeEvent, type FormEvent, type KeyboardEvent, useRef, useState } from 'react';
+import { api, apiUpload, ApiError } from '../api/client';
 import type { ChatMessage } from './ConversationView';
 
 function newClientId(): string {
@@ -27,6 +27,43 @@ export function InputBar({
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  async function onPickFile(e: ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file || sending) return;
+
+    // Friendly client-side size guard (WhatsApp caps vary; 16MB is a safe ceiling).
+    if (file.size > 16 * 1024 * 1024) {
+      setError('File is too large (max 16 MB).');
+      return;
+    }
+
+    setSending(true);
+    setError(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('conversationId', conversationId);
+      form.append('clientId', newClientId());
+      if (text.trim()) form.append('caption', text.trim());
+      const { message } = await apiUpload<{ message: ChatMessage }>('/api/messages/media', form);
+      onSent(message);
+      setText('');
+    } catch (err) {
+      if (err instanceof ApiError && err.code === 'WINDOW_CLOSED') {
+        setWindowOpen(false);
+        setError(err.message);
+      } else if (err instanceof ApiError) {
+        setError(err.message);
+      } else {
+        setError('Could not send the file. Please try again.');
+      }
+    } finally {
+      setSending(false);
+    }
+  }
 
   async function send(e?: FormEvent) {
     e?.preventDefault();
@@ -75,12 +112,20 @@ export function InputBar({
     <form onSubmit={send} className="bg-[#f0f2f5] px-4 py-3">
       {error && <div className="mb-2 text-center text-sm text-red-600">{error}</div>}
       <div className="flex items-end gap-2">
-        {/* Attach (file sending — Round 2) */}
+        {/* Attach a file */}
+        <input
+          ref={fileRef}
+          type="file"
+          className="hidden"
+          accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx"
+          onChange={onPickFile}
+        />
         <button
           type="button"
-          title="Attach a file (coming soon)"
-          className="mb-1 shrink-0 cursor-not-allowed text-xl text-ink-muted opacity-60"
-          disabled
+          title="Attach a file"
+          onClick={() => fileRef.current?.click()}
+          disabled={sending}
+          className="mb-1 shrink-0 text-xl text-ink-muted hover:text-brand-primary disabled:opacity-50"
         >
           📎
         </button>

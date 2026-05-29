@@ -4,6 +4,7 @@ import { prisma } from '../db/prisma';
 import { env } from '../config/env';
 import { ApiError } from '../lib/errors';
 import { logger } from '../config/logger';
+import { mediaExists, readMedia } from '../lib/mediaStore';
 
 export const mediaRouter = Router();
 
@@ -31,7 +32,23 @@ mediaRouter.get(
     });
     if (!msg?.mediaUrl) throw new ApiError(404, 'NOT_FOUND', 'No media for this message.');
 
-    // Twilio media URL needs Basic auth (Account SID : Auth Token). The fetch
+    // Outbound media we sent is stored locally on disk ("local:<id>").
+    if (msg.mediaUrl.startsWith('local:')) {
+      if (!(await mediaExists(id))) {
+        throw new ApiError(404, 'GONE', 'Media no longer available (cleared on server restart).');
+      }
+      const buf = await readMedia(id);
+      res.setHeader('Content-Type', msg.mediaMime || 'application/octet-stream');
+      res.setHeader('Cache-Control', 'private, max-age=3600');
+      if (req.query.download) {
+        const name = msg.mediaName || `download.${(msg.mediaMime || 'bin').split('/')[1] || 'bin'}`;
+        res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+      }
+      res.send(buf);
+      return;
+    }
+
+    // Inbound media lives at a Twilio URL that needs Basic auth. The fetch
     // spec strips Authorization on cross-origin redirects (Twilio → CDN), so
     // following redirects is safe.
     const authHeader =

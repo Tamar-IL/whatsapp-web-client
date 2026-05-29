@@ -1,4 +1,6 @@
+import crypto from 'node:crypto';
 import { Router } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/asyncHandler';
 import { ApiError, twilioErrorMessage } from '../lib/errors';
@@ -6,10 +8,17 @@ import { windowState, WindowClosedError } from '../lib/window';
 import { prisma } from '../db/prisma';
 import { withOutbox } from '../realtime/outbox';
 import { sendWhatsAppText } from '../twilio/programmable';
+import { twilioClient } from '../twilio/client';
+import { saveMedia, signMediaToken, mimeToType } from '../lib/mediaStore';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
 
 export const messagesRouter = Router();
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: env.MEDIA_MAX_BYTES },
+});
 
 const sendTextSchema = z.object({
   conversationId: z.string().min(1),
@@ -110,10 +119,127 @@ messagesRouter.post(
 );
 
 /**
- * POST /api/messages/voice — Phase 5 ticket 5.2.
- * POST /api/messages/media — Phase 4 ticket 4.2.
- * POST /api/messages/:id/reaction — Phase 5 ticket 5.6.
+ * POST /api/messages/media — send an image / video / document / audio file.
+ *
+ * Programmable Messaging sends media by URL, so we:
+ *  1. Validate + persist the upload to local disk.
+ *  2. Mint a short-lived signed public URL (/public/media/:token).
+ *  3. Tell Twilio to fetch that URL and send it to the customer.
+ *  4. Store the outbound message (served back to our UI from disk).
  */
+messagesRouter.post(
+  '/media',
+  upload.single('file'),
+  asyncHandler(async (req, res) => {
+    const conversationId = req.body?.conversationId as string | undefined;
+    const clientId = (req.body?.clientId as string | undefined) ?? crypto.randomUUID();
+    const caption = (req.body?.caption as string | undefined)?.trim() || undefined;
+    const file = req.file;
+
+    if (!file || !conversationId) {
+      throw new ApiError(400, 'BAD_INPUT', 'A file and conversationId are required.');
+    }
+
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: { contact: true },
+    });
+    if (!conv) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found.');
+    if (!windowState(conv.lastInboundAt).open) {
+      throw new ApiError(409, 'WINDOW_CLOSED', new WindowClosedError().message);
+    }
+
+    const mime = file.mimetype || 'application/octet-stream';
+    const type = mimeToType(mime);
+
+    // Create the row first so we have an id to key the on-disk file by.
+    const draft = await prisma.message.create({
+      data: {
+        conversationId: conv.id,
+        twilioSid: `pending:${crypto.randomUUID()}`,
+        clientId,
+        direction: 'outbound',
+        type,
+        status: 'queued',
+        body: caption ?? null,
+        mediaMime: mime,
+        mediaName: file.originalname,
+        mediaSize: file.size,
+        mediaUrl: 'local:pending',
+        sentAt: new Date(),
+      },
+    });
+
+    await saveMedia(draft.id, file.buffer);
+    await prisma.message.update({ where: { id: draft.id }, data: { mediaUrl: `local:${draft.id}` } });
+
+    const publicUrl = `${env.PUBLIC_BASE_URL}/public/media/${signMediaToken(draft.id)}`;
+    const statusCallbackUrl = `${env.PUBLIC_BASE_URL}/webhooks/twilio/status`;
+
+    let sid: string;
+    try {
+      const sent = await twilioClient.messages.create({
+        from: env.TWILIO_WHATSAPP_SENDER,
+        to: `whatsapp:${conv.contact.phoneNumber}`,
+        mediaUrl: [publicUrl],
+        body: caption,
+        statusCallback: statusCallbackUrl,
+      });
+      sid = sent.sid;
+    } catch (err) {
+      const code = (err as { code?: string | number })?.code;
+      logger.error({ err, conversationId: conv.id }, 'Twilio media send failed');
+      await prisma.message.update({
+        where: { id: draft.id },
+        data: { status: 'failed', errorCode: code ? String(code) : null },
+      });
+      throw new ApiError(502, 'TWILIO_SEND_FAILED', twilioErrorMessage(code ? String(code) : undefined));
+    }
+
+    const message = await withOutbox(async (tx, emit) => {
+      const m = await tx.message.update({
+        where: { id: draft.id },
+        data: { twilioSid: sid, status: 'sent' },
+      });
+      await tx.conversation.update({ where: { id: conv.id }, data: { lastMessageAt: new Date() } });
+      await emit({
+        kind: 'message.added',
+        conversationId: conv.id,
+        payload: {
+          messageId: m.id,
+          clientId: m.clientId,
+          direction: 'outbound',
+          type: m.type,
+          status: m.status,
+          body: m.body,
+          sentAt: m.sentAt,
+          hasMedia: true,
+          mediaMime: m.mediaMime,
+          mediaName: m.mediaName,
+        },
+      });
+      return m;
+    });
+
+    res.json({
+      message: {
+        id: message.id,
+        clientId: message.clientId,
+        twilioSid: message.twilioSid,
+        direction: 'outbound',
+        type: message.type,
+        status: message.status,
+        body: message.body,
+        mediaUrl: `/api/media/${message.id}`,
+        mediaMime: message.mediaMime,
+        mediaName: message.mediaName,
+        hasMedia: true,
+        sentAt: message.sentAt,
+      },
+    });
+  }),
+);
+
+/** POST /api/messages/voice — Phase 5. POST /api/messages/:id/reaction — Phase 5. */
 messagesRouter.post('/voice', (_req, res) => res.status(501).json({ code: 'NOT_IMPLEMENTED' }));
-messagesRouter.post('/media', (_req, res) => res.status(501).json({ code: 'NOT_IMPLEMENTED' }));
 messagesRouter.post('/:id/reaction', (_req, res) => res.status(501).json({ code: 'NOT_IMPLEMENTED' }));

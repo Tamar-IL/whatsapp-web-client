@@ -10,6 +10,7 @@ import { sessionMiddleware } from './auth/session';
 import { issueCsrfCookie, requireCsrf } from './auth/csrf';
 import { twilioWebhookRouter } from './twilio/webhook';
 import { apiRouter } from './api';
+import { publicMediaRouter } from './api/publicMedia';
 import { ApiError } from './lib/errors';
 
 /**
@@ -53,6 +54,10 @@ export function createApp(): Express {
 
   // 4. Webhooks (own body parser, no session, no CSRF)
   app.use('/webhooks/twilio', twilioWebhookRouter);
+
+  // 4b. Public token-protected media (Twilio fetches outbound media here).
+  //     No session/CSRF — access is gated by the signed token in the path.
+  app.use('/public/media', publicMediaRouter);
 
   // 5. Health endpoints
   app.get('/healthz', (_req, res) => res.json({ ok: true }));

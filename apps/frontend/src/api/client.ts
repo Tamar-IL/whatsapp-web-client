@@ -63,3 +63,22 @@ export async function api<T>(path: string, opts: FetchOptions = {}): Promise<T> 
 export async function ensureCsrf(): Promise<void> {
   await fetch('/api/auth/me', { credentials: 'include' }).catch(() => undefined);
 }
+
+/**
+ * Multipart upload (file send). Browser sets the multipart Content-Type with its
+ * boundary, so we must NOT set it manually — only the CSRF header.
+ */
+export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  const csrf = getCookie(CSRF_COOKIE_NAME);
+  if (csrf) headers['X-CSRF-Token'] = csrf;
+
+  const res = await fetch(path, { method: 'POST', headers, credentials: 'include', body: form });
+  const ct = res.headers.get('content-type') ?? '';
+  const data: unknown = ct.includes('application/json') ? await res.json() : await res.text();
+  if (!res.ok) {
+    const err = (data as { code?: string; message?: string }) ?? {};
+    throw new ApiError(res.status, err.code ?? 'UNKNOWN', err.message ?? res.statusText);
+  }
+  return data as T;
+}
