@@ -59,13 +59,22 @@ export function AudioPlayer({ src, onError }: { src: string; onError?: () => voi
           step="0.1"
           value={current}
           onChange={onSeek}
-          className="h-1 w-full cursor-pointer appearance-none rounded-full"
+          className="wa-range w-full cursor-pointer"
           style={{
-            background: `linear-gradient(to right, var(--c-brand-action) ${pct}%, rgba(0,0,0,0.15) ${pct}%)`,
+            background: `linear-gradient(to right, #8696a0 ${pct}%, rgba(0,0,0,0.15) ${pct}%)`,
           }}
         />
-        <div className="mt-1 text-[10px] text-ink-muted">
-          {fmt(current)} {duration ? `/ ${fmt(duration)}` : ''}
+        <div className="mt-1 flex items-center justify-between text-[10px] text-ink-muted">
+          <span>{fmt(current)} {duration ? `/ ${fmt(duration)}` : ''}</span>
+          <a
+            href={`${src}?download=1`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-brand-link underline"
+            title="Download audio"
+          >
+            download
+          </a>
         </div>
       </div>
 

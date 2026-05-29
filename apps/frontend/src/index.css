@@ -40,3 +40,31 @@ body {
 .scroll-thin::-webkit-scrollbar { width: 8px; }
 .scroll-thin::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.15); border-radius: 4px; }
 .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+
+/* WhatsApp-style audio progress track: thin gray line with a round dot handle */
+.wa-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 3px;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.15);
+  outline: none;
+}
+.wa-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #8696a0; /* WhatsApp gray dot */
+  cursor: pointer;
+  border: none;
+}
+.wa-range::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #8696a0;
+  cursor: pointer;
+  border: none;
+}

@@ -28,6 +28,25 @@ export function InputBar({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-grow the textarea up to a max height (so Shift+Enter expands the box
+  // instead of showing a 1-line scrollbar).
+  function autoGrow() {
+    const ta = taRef.current;
+    if (!ta) return;
+    ta.style.height = 'auto';
+    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+  }
+  function onChangeText(v: string) {
+    setText(v);
+    // Defer so scrollHeight reflects the new content.
+    requestAnimationFrame(autoGrow);
+  }
+  function resetHeight() {
+    const ta = taRef.current;
+    if (ta) ta.style.height = 'auto';
+  }
 
   async function onPickFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -51,6 +70,7 @@ export function InputBar({
       const { message } = await apiUpload<{ message: ChatMessage }>('/api/messages/media', form);
       onSent(message);
       setText('');
+      resetHeight();
     } catch (err) {
       if (err instanceof ApiError && err.code === 'WINDOW_CLOSED') {
         setWindowOpen(false);
@@ -78,6 +98,7 @@ export function InputBar({
       });
       onSent(message);
       setText('');
+      resetHeight();
     } catch (err) {
       if (err instanceof ApiError && err.code === 'WINDOW_CLOSED') {
         setWindowOpen(false);
@@ -132,12 +153,13 @@ export function InputBar({
 
         <div className="flex flex-1 items-end rounded-3xl border border-gray-300 bg-white px-4 py-2 shadow-sm focus-within:border-brand-primary focus-within:ring-1 focus-within:ring-brand-primary">
           <textarea
+            ref={taRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => onChangeText(e.target.value)}
             onKeyDown={onKeyDown}
             rows={1}
             placeholder="Type a message"
-            className="max-h-32 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
+            className="max-h-40 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
           />
         </div>
 

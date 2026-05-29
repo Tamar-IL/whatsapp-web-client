@@ -278,6 +278,14 @@ function MediaContent({
           className="max-h-72 cursor-pointer rounded object-cover"
           title="Click to view full size"
         />
+        <a
+          href={`${url}?download=1`}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 inline-block text-[11px] text-brand-link underline"
+        >
+          ⬇ Download
+        </a>
       </div>
     );
   }

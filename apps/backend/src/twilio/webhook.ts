@@ -39,7 +39,9 @@ twilioWebhookRouter.post(
     const from = p.From; // "whatsapp:+15551234567"
 
     logger.info(
-      { messageSid, from, hasBody: Boolean(p.Body), numMedia: p.NumMedia },
+      // SPIKE: fullPayload lets us inspect for reaction/quoted-reply context
+      // fields. Remove once reactions/replies support is decided.
+      { messageSid, from, hasBody: Boolean(p.Body), numMedia: p.NumMedia, fullPayload: p },
       'Twilio inbound webhook',
     );
 
