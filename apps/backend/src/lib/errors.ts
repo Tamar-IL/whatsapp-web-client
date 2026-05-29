@@ -10,6 +10,7 @@
 export const TWILIO_ERROR_MESSAGES: Record<string, string> = {
   '63016': 'You can only send free-form messages within 24 hours of the customer\'s last message. Use a template to start the conversation.',
   '63018': 'Sending too quickly. Please wait a moment and try again.',
+  '63019': 'WhatsApp could not accept this media. Check the size (images ≤5MB, video ≤16MB) and use a supported format (JPG, PNG, MP4, PDF) — SVG is not supported.',
   '63017': 'This recipient has blocked your WhatsApp number.',
   '63003': 'WhatsApp could not deliver this message (channel unavailable).',
   '63013': 'The message was rejected as spam-like content. Edit and retry.',

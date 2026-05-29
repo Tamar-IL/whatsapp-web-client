@@ -52,13 +52,31 @@ export function InputBar({
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    if (file.size > 16 * 1024 * 1024) {
-      setError('File is too large (max 16 MB).');
+
+    const mime = file.type || '';
+    // WhatsApp doesn't support SVG images.
+    if (mime === 'image/svg+xml') {
+      setError("WhatsApp doesn't support SVG images. Please use a JPG or PNG.");
       return;
     }
+
+    // Enforce WhatsApp's per-type size limits up front (clear message before send).
+    const isImage = mime.startsWith('image/');
+    const isVideo = mime.startsWith('video/');
+    const isAudio = mime.startsWith('audio/');
+    const limitMB = isImage ? 5 : isVideo || isAudio ? 16 : 100;
+    if (file.size > limitMB * 1024 * 1024) {
+      const kind = isImage ? 'image' : isVideo ? 'video' : isAudio ? 'audio file' : 'file';
+      setError(
+        `This ${kind} is ${(file.size / 1024 / 1024).toFixed(1)} MB — WhatsApp's limit is ${limitMB} MB. ` +
+          (isImage ? 'Try compressing or resizing it.' : ''),
+      );
+      return;
+    }
+
     setError(null);
     setStaged(file);
-    setStagedPreview(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+    setStagedPreview(isImage ? URL.createObjectURL(file) : null);
   }
 
   function clearStaged() {
