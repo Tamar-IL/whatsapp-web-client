@@ -1,9 +1,10 @@
 /**
- * Input bar (Phase 3 ticket 3.8) — WhatsApp-style.
+ * Input bar — WhatsApp-style.
  *
- * Rounded pill text field + circular send button. Enter sends, Shift+Enter newline.
- * The paperclip is a placeholder for file sending (Round 2). If the 24h window is
- * closed the server returns 409 WINDOW_CLOSED — we show the template notice.
+ * Text: Enter sends, Shift+Enter newline; textarea auto-grows.
+ * Files: the paperclip STAGES a file (with a preview); it's only sent when you
+ * press Send/Enter (optionally with the text as a caption). A × removes the stage.
+ * 24h window closed → server returns 409 WINDOW_CLOSED → show template notice.
  */
 import { type ChangeEvent, type FormEvent, type KeyboardEvent, useRef, useState } from 'react';
 import { api, apiUpload, ApiError } from '../api/client';
@@ -27,11 +28,11 @@ export function InputBar({
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [staged, setStaged] = useState<File | null>(null);
+  const [stagedPreview, setStagedPreview] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
-  // Auto-grow the textarea up to a max height (so Shift+Enter expands the box
-  // instead of showing a 1-line scrollbar).
   function autoGrow() {
     const ta = taRef.current;
     if (!ta) return;
@@ -40,7 +41,6 @@ export function InputBar({
   }
   function onChangeText(v: string) {
     setText(v);
-    // Defer so scrollHeight reflects the new content.
     requestAnimationFrame(autoGrow);
   }
   function resetHeight() {
@@ -48,47 +48,65 @@ export function InputBar({
     if (ta) ta.style.height = 'auto';
   }
 
-  async function onPickFile(e: ChangeEvent<HTMLInputElement>) {
+  function onPickFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    e.target.value = ''; // allow re-selecting the same file
-    if (!file || sending) return;
-
-    // Friendly client-side size guard (WhatsApp caps vary; 16MB is a safe ceiling).
+    e.target.value = '';
+    if (!file) return;
     if (file.size > 16 * 1024 * 1024) {
       setError('File is too large (max 16 MB).');
       return;
     }
-
-    setSending(true);
     setError(null);
-    try {
-      const form = new FormData();
-      form.append('file', file);
-      form.append('conversationId', conversationId);
-      form.append('clientId', newClientId());
-      if (text.trim()) form.append('caption', text.trim());
-      const { message } = await apiUpload<{ message: ChatMessage }>('/api/messages/media', form);
-      onSent(message);
-      setText('');
-      resetHeight();
-    } catch (err) {
-      if (err instanceof ApiError && err.code === 'WINDOW_CLOSED') {
-        setWindowOpen(false);
-        setError(err.message);
-      } else if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError('Could not send the file. Please try again.');
-      }
-    } finally {
-      setSending(false);
+    setStaged(file);
+    setStagedPreview(file.type.startsWith('image/') ? URL.createObjectURL(file) : null);
+  }
+
+  function clearStaged() {
+    if (stagedPreview) URL.revokeObjectURL(stagedPreview);
+    setStaged(null);
+    setStagedPreview(null);
+  }
+
+  function handleApiError(err: unknown, fallback: string) {
+    if (err instanceof ApiError && err.code === 'WINDOW_CLOSED') {
+      setWindowOpen(false);
+      setError(err.message);
+    } else if (err instanceof ApiError) {
+      setError(err.message);
+    } else {
+      setError(fallback);
     }
   }
 
   async function send(e?: FormEvent) {
     e?.preventDefault();
+    if (sending) return;
+
+    // A staged file takes priority; the text becomes its caption.
+    if (staged) {
+      setSending(true);
+      setError(null);
+      try {
+        const form = new FormData();
+        form.append('file', staged);
+        form.append('conversationId', conversationId);
+        form.append('clientId', newClientId());
+        if (text.trim()) form.append('caption', text.trim());
+        const { message } = await apiUpload<{ message: ChatMessage }>('/api/messages/media', form);
+        onSent(message);
+        setText('');
+        resetHeight();
+        clearStaged();
+      } catch (err) {
+        handleApiError(err, 'Could not send the file. Please try again.');
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
     const body = text.trim();
-    if (!body || sending) return;
+    if (!body) return;
     setSending(true);
     setError(null);
     try {
@@ -100,14 +118,7 @@ export function InputBar({
       setText('');
       resetHeight();
     } catch (err) {
-      if (err instanceof ApiError && err.code === 'WINDOW_CLOSED') {
-        setWindowOpen(false);
-        setError(err.message);
-      } else if (err instanceof ApiError) {
-        setError(err.message);
-      } else {
-        setError('Could not send. Please try again.');
-      }
+      handleApiError(err, 'Could not send. Please try again.');
     } finally {
       setSending(false);
     }
@@ -129,11 +140,36 @@ export function InputBar({
     );
   }
 
+  const canSend = !sending && (Boolean(staged) || text.trim().length > 0);
+
   return (
     <form onSubmit={send} className="bg-[#f0f2f5] px-4 py-3">
       {error && <div className="mb-2 text-center text-sm text-red-600">{error}</div>}
+
+      {/* Staged file preview */}
+      {staged && (
+        <div className="mb-2 flex items-center gap-3 rounded-lg border border-gray-300 bg-white px-3 py-2">
+          {stagedPreview ? (
+            <img src={stagedPreview} alt="preview" className="h-12 w-12 rounded object-cover" />
+          ) : (
+            <span className="text-2xl">📎</span>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-sm font-medium text-ink">{staged.name}</div>
+            <div className="text-xs text-ink-muted">{(staged.size / 1024).toFixed(0)} KB · ready to send</div>
+          </div>
+          <button
+            type="button"
+            onClick={clearStaged}
+            className="shrink-0 rounded-full px-2 text-lg text-ink-muted hover:text-red-600"
+            title="Remove"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
-        {/* Attach a file */}
         <input
           ref={fileRef}
           type="file"
@@ -158,14 +194,14 @@ export function InputBar({
             onChange={(e) => onChangeText(e.target.value)}
             onKeyDown={onKeyDown}
             rows={1}
-            placeholder="Type a message"
+            placeholder={staged ? 'Add a caption (optional)' : 'Type a message'}
             className="max-h-40 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
           />
         </div>
 
         <button
           type="submit"
-          disabled={sending || !text.trim()}
+          disabled={!canSend}
           title="Send"
           className="mb-0.5 flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-brand-primary text-white transition hover:opacity-90 disabled:opacity-50"
         >
