@@ -23,6 +23,7 @@ export interface ChatMessage {
   mediaSize?: number | null;
   hasMedia?: boolean;
   sentAt: string;
+  replyTo?: { body: string | null; direction: string; type: string } | null;
 }
 
 interface ContactInfo {
@@ -87,6 +88,7 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         mediaUrl: p.type !== 'text' ? `/api/media/${String(p.messageId)}` : null,
         mediaMime: (p.mediaMime as string) ?? null,
         mediaName: (p.mediaName as string) ?? null,
+        replyTo: (p.replyTo as ChatMessage['replyTo']) ?? null,
       };
       setMessages((prev) => (prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]));
     };
@@ -223,6 +225,16 @@ function Bubble({ message, onOpenImage }: { message: ChatMessage; onOpenImage: (
           ' text-ink'
         }
       >
+        {message.replyTo && (
+          <div className="mb-1 rounded border-l-4 border-brand-action bg-black/[0.04] px-2 py-1 text-xs">
+            <div className="font-medium text-brand-link">
+              {message.replyTo.direction === 'outbound' ? 'You' : 'Them'}
+            </div>
+            <div className="truncate text-ink-muted">
+              {message.replyTo.body ?? `[${message.replyTo.type}]`}
+            </div>
+          </div>
+        )}
         {message.hasMedia && message.mediaUrl && (
           <MediaContent message={message} onOpenImage={onOpenImage} />
         )}

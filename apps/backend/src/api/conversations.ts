@@ -94,23 +94,41 @@ conversationsRouter.get(
       take: limit,
     });
 
+    // Resolve quoted-reply snippets in one batched query.
+    const replySids = messages
+      .map((m) => m.replyToTwilioSid)
+      .filter((s): s is string => Boolean(s));
+    const quotedRows = replySids.length
+      ? await prisma.message.findMany({
+          where: { twilioSid: { in: replySids } },
+          select: { twilioSid: true, body: true, direction: true, type: true },
+        })
+      : [];
+    const quotedMap = new Map(quotedRows.map((q) => [q.twilioSid, q]));
+
     res.json({
-      messages: messages.reverse().map((m) => ({
-        id: m.id,
-        clientId: m.clientId,
-        direction: m.direction,
-        type: m.type,
-        status: m.status,
-        body: m.body,
-        mediaUrl: m.mediaUrl ? `/api/media/${m.id}` : null,
-        mediaMime: m.mediaMime,
-        mediaName: m.mediaName,
-        mediaSize: m.mediaSize,
-        hasMedia: Boolean(m.mediaUrl),
-        errorCode: m.errorCode,
-        errorMessage: m.errorMessage,
-        sentAt: m.sentAt,
-      })),
+      messages: messages.reverse().map((m) => {
+        const quoted = m.replyToTwilioSid ? quotedMap.get(m.replyToTwilioSid) : undefined;
+        return {
+          id: m.id,
+          clientId: m.clientId,
+          direction: m.direction,
+          type: m.type,
+          status: m.status,
+          body: m.body,
+          mediaUrl: m.mediaUrl ? `/api/media/${m.id}` : null,
+          mediaMime: m.mediaMime,
+          mediaName: m.mediaName,
+          mediaSize: m.mediaSize,
+          hasMedia: Boolean(m.mediaUrl),
+          errorCode: m.errorCode,
+          errorMessage: m.errorMessage,
+          sentAt: m.sentAt,
+          replyTo: quoted
+            ? { body: quoted.body, direction: quoted.direction, type: quoted.type }
+            : null,
+        };
+      }),
     });
   }),
 );
