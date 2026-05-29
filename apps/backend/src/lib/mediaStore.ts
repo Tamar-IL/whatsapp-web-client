@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { env } from '../config/env';
 
@@ -21,7 +22,13 @@ import { env } from '../config/env';
 const TTL_MS = 15 * 60 * 1000; // Twilio fetches within seconds; 15 min is generous.
 
 function storageDir(): string {
-  return path.resolve(env.MEDIA_STORAGE_PATH);
+  // Prefer an absolute MEDIA_STORAGE_PATH (e.g. a Railway Volume mount). Otherwise
+  // use the OS temp dir, which is always writable — avoids permission/cwd issues
+  // on the Railway container (relative './storage' may not be writable).
+  if (env.MEDIA_STORAGE_PATH && path.isAbsolute(env.MEDIA_STORAGE_PATH)) {
+    return env.MEDIA_STORAGE_PATH;
+  }
+  return path.join(os.tmpdir(), 'wweb-media');
 }
 
 function filePath(messageId: string): string {

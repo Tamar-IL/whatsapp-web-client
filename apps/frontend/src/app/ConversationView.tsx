@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { useRealtime } from './RealtimeProvider';
 import { InputBar } from './InputBar';
+import { AudioPlayer } from './AudioPlayer';
 
 export interface ChatMessage {
   id: string;
@@ -42,6 +43,7 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [windowOpen, setWindowOpen] = useState(true);
+  const [lightbox, setLightbox] = useState<string | null>(null);
   const { socket } = useRealtime();
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -162,7 +164,7 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
           {messages.map((m) => (
-            <Bubble key={m.id} message={m} />
+            <Bubble key={m.id} message={m} onOpenImage={setLightbox} />
           ))}
           <div ref={bottomRef} />
         </div>
@@ -174,11 +176,42 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         onSent={handleSent}
         setWindowOpen={setWindowOpen}
       />
+
+      {/* Image lightbox */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6"
+          onClick={() => setLightbox(null)}
+        >
+          <img
+            src={lightbox}
+            alt="full size"
+            className="max-h-[90vh] max-w-[90vw] rounded object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            onClick={() => setLightbox(null)}
+            className="absolute right-5 top-4 text-3xl leading-none text-white/90 hover:text-white"
+            title="Close"
+          >
+            ×
+          </button>
+          <a
+            href={`${lightbox}?download=1`}
+            onClick={(e) => e.stopPropagation()}
+            className="absolute bottom-5 rounded-full bg-white/90 px-4 py-2 text-sm font-medium text-ink hover:bg-white"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Download
+          </a>
+        </div>
+      )}
     </div>
   );
 }
 
-function Bubble({ message }: { message: ChatMessage }) {
+function Bubble({ message, onOpenImage }: { message: ChatMessage; onOpenImage: (url: string) => void }) {
   const outbound = message.direction === 'outbound';
   const time = new Date(message.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return (
@@ -191,7 +224,7 @@ function Bubble({ message }: { message: ChatMessage }) {
         }
       >
         {message.hasMedia && message.mediaUrl && (
-          <MediaContent message={message} />
+          <MediaContent message={message} onOpenImage={onOpenImage} />
         )}
         {message.body && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-ink-muted">
@@ -203,7 +236,13 @@ function Bubble({ message }: { message: ChatMessage }) {
   );
 }
 
-function MediaContent({ message }: { message: ChatMessage }) {
+function MediaContent({
+  message,
+  onOpenImage,
+}: {
+  message: ChatMessage;
+  onOpenImage: (url: string) => void;
+}) {
   const [failed, setFailed] = useState(false);
   const url = message.mediaUrl!;
   const mime = message.mediaMime ?? '';
@@ -228,26 +267,17 @@ function MediaContent({ message }: { message: ChatMessage }) {
   }
 
   if (isImage) {
-    // Click the image to VIEW it full-size in a new tab (no forced download).
-    // A separate small link handles downloading.
+    // Click the image to VIEW it full-size in an in-app lightbox (not a new tab).
     return (
       <div className="mb-1">
-        <a href={url} target="_blank" rel="noreferrer" title="Open full size">
-          <img
-            src={url}
-            alt="image"
-            onError={() => setFailed(true)}
-            className="max-h-72 cursor-pointer rounded object-cover"
-          />
-        </a>
-        <a
-          href={`${url}?download=1`}
-          className="mt-1 block text-[11px] text-brand-link underline"
-          target="_blank"
-          rel="noreferrer"
-        >
-          Download
-        </a>
+        <img
+          src={url}
+          alt="image"
+          onError={() => setFailed(true)}
+          onClick={() => onOpenImage(url)}
+          className="max-h-72 cursor-pointer rounded object-cover"
+          title="Click to view full size"
+        />
       </div>
     );
   }
@@ -258,9 +288,8 @@ function MediaContent({ message }: { message: ChatMessage }) {
   }
   if (isAudio) {
     return (
-      <div className="mb-1 flex flex-col gap-1">
-        <span className="text-[11px] text-ink-muted">🎤 Voice message</span>
-        <audio controls src={url} onError={() => setFailed(true)} className="w-60" />
+      <div className="mb-1 w-64">
+        <AudioPlayer src={url} onError={() => setFailed(true)} />
       </div>
     );
   }

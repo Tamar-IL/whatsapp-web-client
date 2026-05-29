@@ -74,6 +74,15 @@ async function handleInbound(
   const profileName = p.ProfileName || undefined;
   const numMedia = parseInt(p.NumMedia || '0', 10);
 
+  // SPIKE (reactions): WhatsApp reactions and other special inbound types arrive
+  // with no Body and no media. Log the full payload so we can see Twilio's exact
+  // format, and DON'T create an empty bubble. Once we know the shape from logs,
+  // we'll implement reaction storage/display.
+  if (!p.Body && numMedia === 0) {
+    logger.info({ fullPayload: p }, 'Inbound non-text message (candidate reaction/system) — capturing format');
+    return;
+  }
+
   // Media metadata (full download happens in Phase 4 via the job queue).
   let type: MessageType = 'text';
   let mediaUrl: string | undefined;

@@ -170,7 +170,13 @@ messagesRouter.post(
       },
     });
 
-    await saveMedia(draft.id, file.buffer);
+    try {
+      await saveMedia(draft.id, file.buffer);
+    } catch (err) {
+      logger.error({ err, id: draft.id }, 'saveMedia failed');
+      await prisma.message.update({ where: { id: draft.id }, data: { status: 'failed' } });
+      throw new ApiError(500, 'STORAGE_FAILED', 'Could not store the file on the server.');
+    }
     await prisma.message.update({ where: { id: draft.id }, data: { mediaUrl: `local:${draft.id}` } });
 
     const publicUrl = `${env.PUBLIC_BASE_URL}/public/media/${signMediaToken(draft.id)}`;
@@ -187,13 +193,16 @@ messagesRouter.post(
       });
       sid = sent.sid;
     } catch (err) {
-      const code = (err as { code?: string | number })?.code;
-      logger.error({ err, conversationId: conv.id }, 'Twilio media send failed');
+      const e = err as { code?: string | number; message?: string; status?: number };
+      logger.error({ err, conversationId: conv.id, publicUrl }, 'Twilio media send failed');
       await prisma.message.update({
         where: { id: draft.id },
-        data: { status: 'failed', errorCode: code ? String(code) : null },
+        data: { status: 'failed', errorCode: e.code ? String(e.code) : null, errorMessage: e.message ?? null },
       });
-      throw new ApiError(502, 'TWILIO_SEND_FAILED', twilioErrorMessage(code ? String(code) : undefined));
+      // Surface the real reason so we can diagnose (Twilio code + message).
+      const friendly = twilioErrorMessage(e.code ? String(e.code) : undefined);
+      const detail = e.code ? ` [Twilio ${e.code}: ${e.message ?? ''}]` : e.message ? ` [${e.message}]` : '';
+      throw new ApiError(502, 'TWILIO_SEND_FAILED', `${friendly}${detail}`);
     }
 
     const message = await withOutbox(async (tx, emit) => {
