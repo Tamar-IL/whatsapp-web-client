@@ -7,6 +7,10 @@ const schema = z.object({
 
   PUBLIC_BASE_URL: z.string().url(),
   FRONTEND_ORIGIN: z.string().url().optional(),
+  // Base URL Twilio uses to fetch OUTBOUND media. Should bypass any CDN/proxy
+  // (e.g. Cloudflare) that blocks bots — point it at the raw Railway domain.
+  // Falls back to RAILWAY_PUBLIC_DOMAIN, then PUBLIC_BASE_URL.
+  MEDIA_PUBLIC_BASE_URL: z.string().url().optional(),
 
   DATABASE_URL: z.string().min(1),
 

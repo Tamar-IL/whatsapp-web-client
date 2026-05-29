@@ -20,6 +20,20 @@ const upload = multer({
   limits: { fileSize: env.MEDIA_MAX_BYTES },
 });
 
+/**
+ * Base URL Twilio fetches outbound media from. We prefer a URL that bypasses
+ * Cloudflare (which blocks Twilio's media bot -> error 63019):
+ *   1. MEDIA_PUBLIC_BASE_URL if explicitly set
+ *   2. the raw Railway domain (RAILWAY_PUBLIC_DOMAIN) — not proxied by Cloudflare
+ *   3. PUBLIC_BASE_URL as a last resort
+ */
+function mediaPublicBaseUrl(): string {
+  if (env.MEDIA_PUBLIC_BASE_URL) return env.MEDIA_PUBLIC_BASE_URL;
+  const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
+  if (railway) return `https://${railway}`;
+  return env.PUBLIC_BASE_URL;
+}
+
 const sendTextSchema = z.object({
   conversationId: z.string().min(1),
   body: z.string().min(1).max(4096),
@@ -179,8 +193,9 @@ messagesRouter.post(
     }
     await prisma.message.update({ where: { id: draft.id }, data: { mediaUrl: `local:${draft.id}` } });
 
-    const publicUrl = `${env.PUBLIC_BASE_URL}/public/media/${signMediaToken(draft.id)}`;
+    const publicUrl = `${mediaPublicBaseUrl()}/public/media/${signMediaToken(draft.id)}`;
     const statusCallbackUrl = `${env.PUBLIC_BASE_URL}/webhooks/twilio/status`;
+    logger.info({ publicUrl, conversationId: conv.id }, 'Sending media via Twilio');
 
     let sid: string;
     try {
