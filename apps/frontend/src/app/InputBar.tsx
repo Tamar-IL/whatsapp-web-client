@@ -228,8 +228,23 @@ export function InputBar({
           onChange={onPickFile}
         />
 
-        {/* Pill containing attach + send (both left) + textarea */}
+        {/* Pill containing send (far left) + attach + textarea */}
         <div className="flex flex-1 items-end gap-2 rounded-3xl border border-gray-300 bg-white px-3 py-2 shadow-sm focus-within:border-brand-primary focus-within:ring-1 focus-within:ring-brand-primary">
+          {/* Send — teal-green icon only (no circle), far left, mirrored */}
+          <button
+            type="submit"
+            disabled={!canSend}
+            title="Send"
+            className="shrink-0 leading-none text-brand-link transition hover:text-brand-primary disabled:opacity-40"
+          >
+            {sending ? (
+              <span className="text-sm">…</span>
+            ) : (
+              <svg viewBox="0 0 24 24" className="h-6 w-6 -scale-x-100 fill-current">
+                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+              </svg>
+            )}
+          </button>
           <button
             type="button"
             title="Attach a file"
@@ -238,21 +253,6 @@ export function InputBar({
             className="shrink-0 text-xl leading-none text-ink-muted hover:text-brand-primary disabled:opacity-50"
           >
             📎
-          </button>
-          {/* Send — green icon only, no filled circle, next to attach */}
-          <button
-            type="submit"
-            disabled={!canSend}
-            title="Send"
-            className="shrink-0 leading-none text-brand-action transition hover:text-brand-primary disabled:opacity-40"
-          >
-            {sending ? (
-              <span className="text-sm">…</span>
-            ) : (
-              <svg viewBox="0 0 24 24" className="h-6 w-6 fill-current">
-                <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-              </svg>
-            )}
           </button>
           <textarea
             ref={taRef}
