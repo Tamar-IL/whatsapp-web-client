@@ -10,6 +10,7 @@ import { withOutbox } from '../realtime/outbox';
 import { sendWhatsAppText } from '../twilio/programmable';
 import { twilioClient } from '../twilio/client';
 import { saveMedia, signMediaToken, mimeToType } from '../lib/mediaStore';
+import { compressVideoToFit, SAFE_VIDEO_BYTES, VideoTooLargeError } from '../lib/videoTranscode';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
 
@@ -181,8 +182,39 @@ messagesRouter.post(
       throw new ApiError(409, 'WINDOW_CLOSED', new WindowClosedError().message);
     }
 
-    const mime = file.mimetype || 'application/octet-stream';
+    let mime = file.mimetype || 'application/octet-stream';
+    let buffer = file.buffer;
+    let originalName = file.originalname;
+    let mediaSize = file.size;
     const type = mimeToType(mime);
+
+    // WhatsApp hard-rejects video > 16MB (Twilio error 11751). Auto-compress
+    // oversized video down to fit — just like the official WhatsApp app does —
+    // so the operator can send any clip without worrying about size.
+    if (type === 'video' && mediaSize > SAFE_VIDEO_BYTES) {
+      logger.info({ conversationId: conv.id, originalBytes: mediaSize }, 'compressing oversized video');
+      try {
+        const out = await compressVideoToFit(buffer, originalName);
+        buffer = out.buffer;
+        mime = out.mime;
+        originalName = out.filename;
+        mediaSize = out.buffer.length;
+        logger.info(
+          { conversationId: conv.id, originalBytes: file.size, compressedBytes: mediaSize },
+          'video compressed',
+        );
+      } catch (err) {
+        if (err instanceof VideoTooLargeError) {
+          throw new ApiError(
+            413,
+            'VIDEO_TOO_LARGE',
+            'This video is too long to compress under WhatsApp\'s 16 MB limit. Trim it shorter and try again.',
+          );
+        }
+        logger.error({ err, conversationId: conv.id }, 'video compression failed');
+        throw new ApiError(500, 'COMPRESSION_FAILED', 'Could not process this video. Try a different file.');
+      }
+    }
 
     // Create the row first so we have an id to key the on-disk file by.
     const draft = await prisma.message.create({
@@ -195,15 +227,15 @@ messagesRouter.post(
         status: 'queued',
         body: caption ?? null,
         mediaMime: mime,
-        mediaName: file.originalname,
-        mediaSize: file.size,
+        mediaName: originalName,
+        mediaSize,
         mediaUrl: 'local:pending',
         sentAt: new Date(),
       },
     });
 
     try {
-      await saveMedia(draft.id, file.buffer);
+      await saveMedia(draft.id, buffer);
     } catch (err) {
       logger.error({ err, id: draft.id }, 'saveMedia failed');
       await prisma.message.update({ where: { id: draft.id }, data: { status: 'failed' } });

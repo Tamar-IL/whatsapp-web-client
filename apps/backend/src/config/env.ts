@@ -26,7 +26,10 @@ const schema = z.object({
   TWILIO_WHATSAPP_SENDER: z.string().regex(/^whatsapp:\+\d+$/, 'TWILIO_WHATSAPP_SENDER must look like "whatsapp:+E.164"'),
 
   MEDIA_STORAGE_PATH: z.string().default('./storage'),
-  MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(100 * 1024 * 1024),
+  // Max upload accepted into the server. Source videos are auto-compressed down
+  // to fit WhatsApp's 16MB cap, so this is the cap on the ORIGINAL file the
+  // operator picks (not what WhatsApp receives). Kept generous for phone clips.
+  MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(200 * 1024 * 1024),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   TRUST_PROXY: z.string().default('1'),

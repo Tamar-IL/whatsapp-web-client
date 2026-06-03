@@ -64,16 +64,21 @@ export function InputBar({
       return;
     }
 
-    // Enforce WhatsApp's per-type size limits up front (clear message before send).
+    // Enforce per-type size limits up front (clear message before send).
+    // Video is the exception: oversized clips are auto-compressed server-side to
+    // fit WhatsApp's 16MB cap, so we allow large source files (up to the upload
+    // cap) and only reject what's too big to even upload.
     const isImage = mime.startsWith('image/');
     const isVideo = mime.startsWith('video/');
     const isAudio = mime.startsWith('audio/');
-    const limitMB = isImage ? 5 : isVideo || isAudio ? 16 : 100;
+    const limitMB = isImage ? 5 : isVideo ? 200 : isAudio ? 16 : 100;
     if (file.size > limitMB * 1024 * 1024) {
       const kind = isImage ? 'image' : isVideo ? 'video' : isAudio ? 'audio file' : 'file';
       setError(
-        `This ${kind} is ${(file.size / 1024 / 1024).toFixed(1)} MB — WhatsApp's limit is ${limitMB} MB. ` +
-          (isImage ? 'Try compressing or resizing it.' : ''),
+        isVideo
+          ? `This video is ${(file.size / 1024 / 1024).toFixed(0)} MB — too large to upload (max ${limitMB} MB). Trim it shorter and try again.`
+          : `This ${kind} is ${(file.size / 1024 / 1024).toFixed(1)} MB — WhatsApp's limit is ${limitMB} MB. ` +
+              (isImage ? 'Try compressing or resizing it.' : ''),
       );
       return;
     }
@@ -206,7 +211,17 @@ export function InputBar({
           )}
           <div className="min-w-0 flex-1">
             <div className="truncate text-sm font-medium text-ink">{staged.name}</div>
-            <div className="text-xs text-ink-muted">{(staged.size / 1024).toFixed(0)} KB · ready to send</div>
+            <div className="text-xs text-ink-muted">
+              {staged.size >= 1024 * 1024
+                ? `${(staged.size / 1024 / 1024).toFixed(1)} MB`
+                : `${(staged.size / 1024).toFixed(0)} KB`}
+              {' · '}
+              {staged.type.startsWith('video/') && staged.size > 15.3 * 1024 * 1024
+                ? (sending ? 'optimizing & sending…' : 'will be optimized on send')
+                : sending
+                  ? 'sending…'
+                  : 'ready to send'}
+            </div>
           </div>
           <button
             type="button"
