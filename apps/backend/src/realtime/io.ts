@@ -86,6 +86,19 @@ export function broadcastEvent(event: {
   });
 }
 
+/**
+ * Emit a transient event that is NOT backed by an OutboxEvent row.
+ *
+ * Used for scheduled-message lifecycle pings (added / removed / updated). These
+ * deliberately omit the `id` field so the client's reconnect cursor
+ * (lastEventId) is left untouched — only durable outbox events advance it. A
+ * client that misses one reconciles via GET /api/scheduled on next load.
+ */
+export function emitEphemeral(kind: string, conversationId: string | null, payload: unknown): void {
+  if (!io) return;
+  io.to('live').emit(kind, { conversationId, payload });
+}
+
 export function getIO(): IOServer | null {
   return io;
 }

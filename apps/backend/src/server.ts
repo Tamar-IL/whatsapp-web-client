@@ -6,6 +6,7 @@ import { logger } from './config/logger';
 import { createApp } from './app';
 import { attachSocketIO } from './realtime/io';
 import { bootstrapAdminUser } from './auth/bootstrap';
+import { startScheduler } from './jobs/scheduler';
 import { prisma } from './db/prisma';
 
 async function main() {
@@ -29,6 +30,10 @@ async function main() {
   server.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'Backend listening.');
   });
+
+  // Deliver scheduled messages when their time comes (in-process; the pg-boss
+  // worker is not run in this deployment).
+  startScheduler();
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutting down...');

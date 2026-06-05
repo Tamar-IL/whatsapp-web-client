@@ -56,8 +56,9 @@ model Conversation {
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
-  contact  Contact   @relation(fields: [contactId], references: [id])
-  messages Message[]
+  contact           Contact            @relation(fields: [contactId], references: [id])
+  messages          Message[]
+  scheduledMessages ScheduledMessage[]
 
   @@index([lastMessageAt(sort: Desc)])
   @@index([isPinned, lastMessageAt(sort: Desc)])
@@ -132,6 +133,38 @@ model Message {
   @@index([conversationId, sentAt(sort: Desc)])
   @@index([conversationId, createdAt])
   @@map("messages")
+}
+
+// ===== Scheduled messages =====
+// "Schedule send": an outbound text the operator composes now but wants delivered
+// at a later, more appropriate time. An in-process scheduler (jobs/scheduler.ts)
+// polls for due rows and sends them, re-checking the 24h window at send time.
+//
+// status: pending → sent | failed | canceled
+//   pending  — waiting for its scheduledFor time
+//   sent     — delivered; sentMessageId points at the created Message
+//   failed   — send was attempted but rejected (e.g. window closed, Twilio error)
+//   canceled — operator canceled it before it fired
+model ScheduledMessage {
+  id             String   @id @default(cuid())
+  conversationId String
+  body           String // text content (v1 supports text only)
+  replyToId      String? // our Message.id this is a quoted reply to
+  scheduledFor   DateTime // when to deliver
+  status         String   @default("pending")
+  clientId       String // optimistic UI reconciliation, mirrors Message.clientId
+  createdById    String? // User.id that scheduled it
+  errorMessage   String? // populated when status = failed
+  sentMessageId  String? // Message.id once delivered
+  attempts       Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@index([status, scheduledFor])
+  @@index([conversationId, status])
+  @@map("scheduled_messages")
 }
 
 // ===== Templates =====

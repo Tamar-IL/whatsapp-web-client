@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { useRealtime } from './RealtimeProvider';
 import { InputBar } from './InputBar';
+import { ScheduledBar } from './ScheduledBar';
 import { AudioPlayer } from './AudioPlayer';
 
 export interface ChatMessage {
@@ -194,6 +195,8 @@ export function ConversationView({ conversationId }: { conversationId: string | 
           <div ref={bottomRef} />
         </div>
       </div>
+
+      <ScheduledBar conversationId={conversationId} />
 
       <InputBar
         conversationId={conversationId}

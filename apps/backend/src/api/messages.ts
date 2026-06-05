@@ -7,7 +7,7 @@ import { ApiError, twilioErrorMessage } from '../lib/errors';
 import { windowState, WindowClosedError } from '../lib/window';
 import { prisma } from '../db/prisma';
 import { withOutbox } from '../realtime/outbox';
-import { sendWhatsAppText } from '../twilio/programmable';
+import { deliverText, DeliverError } from '../lib/deliverText';
 import { twilioClient } from '../twilio/client';
 import { saveMedia, signMediaToken, mimeToType } from '../lib/mediaStore';
 import { compressVideoToFit, SAFE_VIDEO_BYTES, VideoTooLargeError } from '../lib/videoTranscode';
@@ -66,88 +66,23 @@ messagesRouter.post(
       throw new ApiError(409, 'WINDOW_CLOSED', new WindowClosedError().message);
     }
 
-    // Resolve the message being replied to (for quoted-reply threading in our UI).
-    let replyToTwilioSid: string | null = null;
-    let replyToSnippet: { id: string; body: string | null; direction: string; type: string } | null = null;
-    if (parsed.data.replyToId) {
-      const target = await prisma.message.findFirst({
-        where: { id: parsed.data.replyToId, conversationId: conv.id },
-        select: { id: true, twilioSid: true, body: true, direction: true, type: true },
-      });
-      if (target) {
-        replyToTwilioSid = target.twilioSid;
-        replyToSnippet = { id: target.id, body: target.body, direction: target.direction, type: target.type };
-      }
-    }
-
-    const statusCallbackUrl = `${env.PUBLIC_BASE_URL}/webhooks/twilio/status`;
-
-    let result: { sid: string };
+    let delivered;
     try {
-      result = await sendWhatsAppText({
-        toPhone: conv.contact.phoneNumber,
+      delivered = await deliverText({
+        conv,
         body: parsed.data.body,
-        statusCallbackUrl,
+        clientId: parsed.data.clientId,
+        replyToId: parsed.data.replyToId,
+        userId: req.session.userId ?? null,
       });
     } catch (err) {
-      const code = (err as { code?: string | number })?.code;
-      logger.error({ err, conversationId: conv.id }, 'Twilio send failed');
-      throw new ApiError(502, 'TWILIO_SEND_FAILED', twilioErrorMessage(code ? String(code) : undefined));
+      if (err instanceof DeliverError) {
+        throw new ApiError(502, 'TWILIO_SEND_FAILED', twilioErrorMessage(err.twilioCode));
+      }
+      throw err;
     }
 
-    const now = new Date();
-    const message = await withOutbox(async (tx, emit) => {
-      const m = await tx.message.create({
-        data: {
-          conversationId: conv.id,
-          twilioSid: result.sid,
-          clientId: parsed.data.clientId,
-          direction: 'outbound',
-          type: 'text',
-          status: 'sent',
-          body: parsed.data.body,
-          replyToTwilioSid,
-          sentAt: now,
-        },
-      });
-      await tx.conversation.update({
-        where: { id: conv.id },
-        data: { lastMessageAt: now },
-      });
-      await emit({
-        kind: 'message.added',
-        conversationId: conv.id,
-        payload: {
-          messageId: m.id,
-          clientId: m.clientId,
-          direction: 'outbound',
-          type: 'text',
-          status: m.status,
-          body: m.body,
-          sentAt: m.sentAt,
-          replyTo: replyToSnippet,
-        },
-      });
-      return m;
-    });
-
-    await prisma.auditEvent.create({
-      data: { userId: req.session.userId ?? null, kind: 'message.sent', payload: { conversationId: conv.id } },
-    });
-
-    res.json({
-      message: {
-        id: message.id,
-        clientId: message.clientId,
-        twilioSid: message.twilioSid,
-        direction: 'outbound',
-        type: 'text',
-        status: message.status,
-        body: message.body,
-        sentAt: message.sentAt,
-        replyTo: replyToSnippet,
-      },
-    });
+    res.json({ message: delivered.message });
   }),
 );
 

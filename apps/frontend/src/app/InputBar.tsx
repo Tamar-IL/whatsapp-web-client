@@ -14,6 +14,33 @@ function newClientId(): string {
   return 'c_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
+/** Next future occurrence of a given wall-clock time (e.g. the next 08:00). */
+function nextTimeAt(hour: number, minute = 0): Date {
+  const d = new Date();
+  d.setHours(hour, minute, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d;
+}
+
+/** Format a Date for a datetime-local input (local time, no timezone suffix). */
+function toLocalInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Human label for a scheduled time, e.g. "Today 20:00" / "Tomorrow 08:00". */
+function formatWhen(d: Date): string {
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const today = new Date();
+  const tomorrow = new Date();
+  tomorrow.setDate(today.getDate() + 1);
+  const sameDay = (a: Date, b: Date) =>
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(d, today)) return `Today ${time}`;
+  if (sameDay(d, tomorrow)) return `Tomorrow ${time}`;
+  return `${d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })} ${time}`;
+}
+
 export function InputBar({
   conversationId,
   windowOpen,
@@ -34,6 +61,9 @@ export function InputBar({
   const [error, setError] = useState<string | null>(null);
   const [staged, setStaged] = useState<File | null>(null);
   const [stagedPreview, setStagedPreview] = useState<string | null>(null);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
+  const [customWhen, setCustomWhen] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -157,6 +187,50 @@ export function InputBar({
     }
   }
 
+  async function schedule(when: Date) {
+    const body = text.trim();
+    if (!body || scheduling) return;
+    if (when.getTime() <= Date.now() + 30 * 1000) {
+      setError('Pick a time at least a minute from now.');
+      return;
+    }
+    setScheduling(true);
+    setError(null);
+    try {
+      // The server emits a `scheduled.added` event that the scheduled-message
+      // bar picks up, so we don't need to thread the result back up here.
+      await api('/api/scheduled', {
+        method: 'POST',
+        body: {
+          conversationId,
+          body,
+          scheduledFor: when.toISOString(),
+          clientId: newClientId(),
+          ...(replyingTo ? { replyToId: replyingTo.id } : {}),
+        },
+      });
+      setText('');
+      resetHeight();
+      onCancelReply();
+      setShowSchedule(false);
+      setCustomWhen('');
+    } catch (err) {
+      handleApiError(err, 'Could not schedule the message. Please try again.');
+    } finally {
+      setScheduling(false);
+    }
+  }
+
+  function openScheduler() {
+    if (!text.trim()) {
+      setError('Type a message first, then schedule it.');
+      return;
+    }
+    setError(null);
+    setCustomWhen(toLocalInput(nextTimeAt(8, 0)));
+    setShowSchedule((s) => !s);
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -176,8 +250,63 @@ export function InputBar({
   const canSend = !sending && (Boolean(staged) || text.trim().length > 0);
 
   return (
-    <form onSubmit={send} className="bg-[#f0f2f5] px-4 py-3">
+    <form onSubmit={send} className="relative bg-[#f0f2f5] px-4 py-3">
       {error && <div className="mb-2 text-center text-sm text-red-600">{error}</div>}
+
+      {/* Schedule-send popover */}
+      {showSchedule && (
+        <div className="absolute bottom-full left-4 right-4 z-20 mb-2 flex justify-center">
+          <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-3 shadow-lg">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-semibold text-ink">Schedule message</span>
+              <button
+                type="button"
+                onClick={() => setShowSchedule(false)}
+                className="rounded-full px-2 text-lg leading-none text-ink-muted hover:text-red-600"
+                title="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="mb-2 grid grid-cols-1 gap-1.5">
+              {[
+                { label: 'In 1 hour', date: new Date(Date.now() + 60 * 60 * 1000) },
+                { label: 'In 3 hours', date: new Date(Date.now() + 3 * 60 * 60 * 1000) },
+                { label: 'Morning', date: nextTimeAt(8, 0) },
+              ].map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  disabled={scheduling}
+                  onClick={() => void schedule(p.date)}
+                  className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-left text-sm hover:border-brand-primary hover:bg-brand-action/5 disabled:opacity-50"
+                >
+                  <span className="font-medium text-ink">{p.label}</span>
+                  <span className="text-xs text-ink-muted">{formatWhen(p.date)}</span>
+                </button>
+              ))}
+            </div>
+            <label className="mb-1 block text-xs font-medium text-ink-muted">Or pick a time</label>
+            <div className="flex items-center gap-2">
+              <input
+                type="datetime-local"
+                value={customWhen}
+                min={toLocalInput(new Date(Date.now() + 60 * 1000))}
+                onChange={(e) => setCustomWhen(e.target.value)}
+                className="flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm focus:border-brand-primary focus:outline-none"
+              />
+              <button
+                type="button"
+                disabled={scheduling || !customWhen}
+                onClick={() => customWhen && void schedule(new Date(customWhen))}
+                className="shrink-0 rounded-lg bg-brand-primary px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {scheduling ? '…' : 'Schedule'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Replying-to bar */}
       {replyingTo && (
@@ -269,6 +398,23 @@ export function InputBar({
           >
             📎
           </button>
+          {/* Schedule send — text only (a staged file is sent immediately) */}
+          {!staged && (
+            <button
+              type="button"
+              title="Schedule message"
+              onClick={openScheduler}
+              disabled={sending || scheduling}
+              className={
+                'shrink-0 leading-none transition disabled:opacity-50 ' +
+                (showSchedule ? 'text-brand-primary' : 'text-ink-muted hover:text-brand-primary')
+              }
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+                <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 18a8 8 0 110-16 8 8 0 010 16zm.5-13H11v6l5 3 .75-1.23-4.25-2.52V7z" />
+              </svg>
+            </button>
+          )}
           <textarea
             ref={taRef}
             value={text}
