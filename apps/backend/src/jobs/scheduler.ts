@@ -47,7 +47,10 @@ async function tick(): Promise<void> {
   try {
     const due = await prisma.scheduledMessage.findMany({
       where: { status: 'pending', scheduledFor: { lte: new Date() } },
-      orderBy: { scheduledFor: 'asc' },
+      // Deterministic order: due time first, then creation order so messages
+      // scheduled for the same instant go out first-scheduled-first. id is a
+      // final tiebreaker (cuid is monotonic-ish but createdAt is the real key).
+      orderBy: [{ scheduledFor: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       take: BATCH,
     });
 
