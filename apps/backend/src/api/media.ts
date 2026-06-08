@@ -119,7 +119,14 @@ mediaRouter.post(
 
     const contact = msg.conversation?.contact;
     const who = contact?.displayName || contact?.profileName || contact?.phoneNumber || 'Unknown';
-    const when = new Date(msg.sentAt).toLocaleString('en-GB', { timeZone: 'Asia/Jerusalem' });
+    // toLocaleString with an explicit timeZone throws on runtimes built without
+    // full ICU data — fall back to a plain ISO timestamp rather than 500.
+    let when: string;
+    try {
+      when = new Date(msg.sentAt).toLocaleString('en-GB', { timeZone: 'Asia/Jerusalem' });
+    } catch {
+      when = new Date(msg.sentAt).toISOString();
+    }
     const sizeKb = Math.max(1, Math.round(buf.length / 1024));
 
     const subject = `WhatsApp ${msg.type} from ${who}`;
@@ -133,7 +140,17 @@ mediaRouter.post(
       'The file is attached to this email.',
     ].join('\n');
 
-    await sendMail({ to: env.MEDIA_EMAIL_TO, subject, text, attachments: [{ filename, content: buf, contentType }] });
+    try {
+      await sendMail({ to: env.MEDIA_EMAIL_TO, subject, text, attachments: [{ filename, content: buf, contentType }] });
+    } catch (err) {
+      // Re-surface configuration/known errors verbatim; wrap unexpected SMTP
+      // failures with their real reason so the UI shows it instead of a generic
+      // "Something went wrong."
+      if (err instanceof ApiError) throw err;
+      const reason = (err as Error)?.message ?? 'unknown error';
+      logger.error({ err, id }, 'media email send failed');
+      throw new ApiError(502, 'EMAIL_SEND_FAILED', `Could not send the email: ${reason}`);
+    }
     res.json({ ok: true, to: env.MEDIA_EMAIL_TO });
   }),
 );
