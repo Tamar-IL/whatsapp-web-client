@@ -20,18 +20,24 @@ async function loadMediaBytes(
   mediaUrl: string,
   mediaMime: string | null,
 ): Promise<{ buf: Buffer; contentType: string }> {
-  if (mediaUrl.startsWith('local:')) {
-    if (!(await mediaExists(id))) {
-      throw new ApiError(404, 'GONE', 'Media no longer available (cleared on server restart).');
-    }
+  // Prefer our own stored copy whenever it exists — checked FIRST and regardless
+  // of what mediaUrl points at, so a persisted inbound file is served straight
+  // from disk.
+  if (await mediaExists(id)) {
     return {
       buf: await readMedia(id),
       contentType: mediaMime || 'application/octet-stream',
     };
   }
 
-  // Inbound media that wasn't persisted yet lives at a Twilio URL needing Basic
-  // auth. The fetch spec strips Authorization on cross-origin redirects
+  // No local copy. Outbound files we sent have no remote source to fall back to.
+  if (mediaUrl.startsWith('local:')) {
+    throw new ApiError(404, 'GONE', 'Media no longer available (cleared on server restart).');
+  }
+
+  // Otherwise the local copy is missing (e.g. ephemeral disk wiped on restart)
+  // but mediaUrl still points at the original Twilio media — re-fetch it. Needs
+  // Basic auth; the fetch spec strips Authorization on cross-origin redirects
   // (Twilio → CDN), so following redirects is safe.
   const authHeader =
     'Basic ' + Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString('base64');

@@ -227,13 +227,16 @@ async function persistInboundMedia(
     }
     const buf = Buffer.from(await upstream.arrayBuffer());
     await saveMedia(messageId, buf);
-    // Capture the real content-type if Twilio reported one and we didn't have it.
+    // IMPORTANT: keep the original Twilio URL in mediaUrl as a fallback source.
+    // media.ts serves our stored copy when present and re-fetches from Twilio if
+    // the copy was wiped (Railway's disk is ephemeral). Overwriting it with
+    // "local:<id>" would strand the media after a restart. Only refresh the MIME
+    // if Twilio reported a better one than we recorded.
     const resolvedMime = mime || upstream.headers.get('content-type') || undefined;
-    await prisma.message.update({
-      where: { id: messageId },
-      data: { mediaUrl: `local:${messageId}`, ...(resolvedMime ? { mediaMime: resolvedMime } : {}) },
-    });
-    logger.info({ messageId, bytes: buf.length }, 'inbound media stored locally');
+    if (resolvedMime && resolvedMime !== mime) {
+      await prisma.message.update({ where: { id: messageId }, data: { mediaMime: resolvedMime } });
+    }
+    logger.info({ messageId, bytes: buf.length }, 'inbound media cached locally (Twilio URL kept as fallback)');
   } catch (err) {
     logger.error({ err, messageId }, 'inbound media persist failed (kept Twilio URL)');
   }
