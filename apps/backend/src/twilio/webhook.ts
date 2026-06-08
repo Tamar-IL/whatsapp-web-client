@@ -5,6 +5,8 @@ import { verifyTwilioSignature } from './signature';
 import { prisma } from '../db/prisma';
 import { withOutbox } from '../realtime/outbox';
 import { mapTwilioStatus, statusRank, syntheticConversationSid } from './programmable';
+import { env } from '../config/env';
+import { saveMedia } from '../lib/mediaStore';
 import type { MessageType } from '@prisma/client';
 
 /**
@@ -101,7 +103,7 @@ async function handleInbound(
   const convSid = syntheticConversationSid(customerPhone);
   const now = new Date();
 
-  await withOutbox(async (tx, emit) => {
+  const created = await withOutbox(async (tx, emit) => {
     const contact = await tx.contact.upsert({
       where: { phoneNumber: customerPhone },
       create: { phoneNumber: customerPhone, profileName },
@@ -191,7 +193,50 @@ async function handleInbound(
         replyTo,
       },
     });
+
+    return message;
   });
+
+  // Pull the actual bytes off Twilio NOW, while the media definitely still
+  // exists, and store our own copy. Inbound Twilio media URLs expire (and need
+  // Basic auth), which is what made old recordings show "Media unavailable".
+  // Once stored, /api/media/:id serves our local copy instead of re-fetching.
+  if (mediaUrl && created?.id) {
+    await persistInboundMedia(created.id, mediaUrl, mediaMime);
+  }
+}
+
+/**
+ * Download an inbound Twilio media file and store it on disk, then flip the
+ * message's mediaUrl to "local:<id>" so it's served from our own copy. Best
+ * effort: on any failure we leave the original Twilio URL in place so the
+ * on-demand proxy in api/media.ts can still try to fetch it later.
+ */
+async function persistInboundMedia(
+  messageId: string,
+  twilioUrl: string,
+  mime: string | undefined,
+): Promise<void> {
+  try {
+    const authHeader =
+      'Basic ' + Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString('base64');
+    const upstream = await fetch(twilioUrl, { headers: { Authorization: authHeader } });
+    if (!upstream.ok) {
+      logger.warn({ messageId, status: upstream.status }, 'inbound media persist: upstream non-OK');
+      return;
+    }
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    await saveMedia(messageId, buf);
+    // Capture the real content-type if Twilio reported one and we didn't have it.
+    const resolvedMime = mime || upstream.headers.get('content-type') || undefined;
+    await prisma.message.update({
+      where: { id: messageId },
+      data: { mediaUrl: `local:${messageId}`, ...(resolvedMime ? { mediaMime: resolvedMime } : {}) },
+    });
+    logger.info({ messageId, bytes: buf.length }, 'inbound media stored locally');
+  } catch (err) {
+    logger.error({ err, messageId }, 'inbound media persist failed (kept Twilio URL)');
+  }
 }
 
 // ===== Status callbacks (outbound delivery/read) =====

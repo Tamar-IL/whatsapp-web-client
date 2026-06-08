@@ -10,6 +10,7 @@ import { useRealtime } from './RealtimeProvider';
 import { InputBar } from './InputBar';
 import { ScheduledBar } from './ScheduledBar';
 import { AudioPlayer } from './AudioPlayer';
+import { EmailMediaButton } from './EmailMediaButton';
 
 export interface ChatMessage {
   id: string;
@@ -337,10 +338,8 @@ function MediaContent({
   if (failed) {
     return (
       <div className="mb-1 rounded bg-black/5 p-3 text-xs text-ink-muted">
-        <div>Media unavailable or still under review.</div>
-        <a href={`${url}?download=1`} className="text-brand-link underline" target="_blank" rel="noreferrer">
-          Try downloading
-        </a>
+        <div>This media couldn’t be shown here.</div>
+        <EmailMediaButton messageId={message.id} label="Email it to me" />
       </div>
     );
   }
@@ -357,40 +356,36 @@ function MediaContent({
           className="max-h-72 cursor-pointer rounded object-cover"
           title="Click to view full size"
         />
-        <a
-          href={`${url}?download=1`}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-1 inline-block text-[11px] text-brand-link underline"
-        >
-          ⬇ Download
-        </a>
+        <div className="mt-1 text-[11px]">
+          <EmailMediaButton messageId={message.id} label="✉ Email to me" />
+        </div>
       </div>
     );
   }
   if (isVideo) {
     return (
-      <video controls src={url} onError={() => setFailed(true)} className="mb-1 max-h-72 rounded" />
+      <div className="mb-1">
+        <video controls src={url} onError={() => setFailed(true)} className="max-h-72 rounded" />
+        <div className="mt-1 text-[11px]">
+          <EmailMediaButton messageId={message.id} label="✉ Email to me" />
+        </div>
+      </div>
     );
   }
   if (isAudio) {
     return (
       <div className="mb-1 w-64">
-        <AudioPlayer src={url} onError={() => setFailed(true)} />
+        <AudioPlayer src={url} messageId={message.id} onError={() => setFailed(true)} />
       </div>
     );
   }
   // document / other
   return (
-    <a
-      href={`${url}?download=1`}
-      target="_blank"
-      rel="noreferrer"
-      className="mb-1 flex items-center gap-2 rounded bg-black/5 px-3 py-2 text-brand-link underline"
-    >
+    <div className="mb-1 flex items-center gap-2 rounded bg-black/5 px-3 py-2">
       <span>📎</span>
-      <span>{message.mediaName ?? 'Download file'}</span>
-    </a>
+      <span className="text-ink-muted">{message.mediaName ?? 'File'}</span>
+      <EmailMediaButton messageId={message.id} label="✉ Email to me" />
+    </div>
   );
 }
 

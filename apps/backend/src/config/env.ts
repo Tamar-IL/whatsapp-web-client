@@ -25,6 +25,22 @@ const schema = z.object({
   TWILIO_CONVERSATION_SERVICE_SID: z.string().min(1),
   TWILIO_WHATSAPP_SENDER: z.string().regex(/^whatsapp:\+\d+$/, 'TWILIO_WHATSAPP_SENDER must look like "whatsapp:+E.164"'),
 
+  // --- Outgoing email (Zoho SMTP) for "email me this recording" ---
+  // Sending uses SMTP, NOT IMAP (IMAP only reads mailboxes). For Zoho:
+  //   SMTP_HOST=smtp.zoho.com  SMTP_PORT=465  SMTP_USER=you@yourdomain
+  //   SMTP_PASS=<app-specific password>   (generate one in Zoho if 2FA is on)
+  // Media email is disabled until SMTP_USER + SMTP_PASS are both set.
+  SMTP_HOST: z.string().default('smtp.zoho.com'),
+  SMTP_PORT: z.coerce.number().int().positive().default(465),
+  // Leave unset to auto-pick: true for port 465, false otherwise (e.g. 587/STARTTLS).
+  SMTP_SECURE: z.enum(['true', 'false']).optional(),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASS: z.string().optional(),
+  // Defaults to SMTP_USER when omitted.
+  MAIL_FROM: z.string().optional(),
+  // Where "email me this recording" delivers to.
+  MEDIA_EMAIL_TO: z.string().email().default('swenlly123@gmail.com'),
+
   MEDIA_STORAGE_PATH: z.string().default('./storage'),
   // Max upload accepted into the server. Source videos are auto-compressed down
   // to fit WhatsApp's 16MB cap, so this is the cap on the ORIGINAL file the

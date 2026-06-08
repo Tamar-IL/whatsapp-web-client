@@ -5,6 +5,7 @@
  * instead of the browser's default <audio controls>, to match the WhatsApp look.
  */
 import { useRef, useState } from 'react';
+import { EmailMediaButton } from './EmailMediaButton';
 
 function fmt(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '0:00';
@@ -13,7 +14,15 @@ function fmt(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function AudioPlayer({ src, onError }: { src: string; onError?: () => void }) {
+export function AudioPlayer({
+  src,
+  messageId,
+  onError,
+}: {
+  src: string;
+  messageId: string;
+  onError?: () => void;
+}) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
@@ -66,15 +75,7 @@ export function AudioPlayer({ src, onError }: { src: string; onError?: () => voi
         />
         <div className="mt-1 flex items-center justify-between text-[10px] text-ink-muted">
           <span>{fmt(current)} {duration ? `/ ${fmt(duration)}` : ''}</span>
-          <a
-            href={`${src}?download=1`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-brand-link underline"
-            title="Download audio"
-          >
-            download
-          </a>
+          <EmailMediaButton messageId={messageId} label="email" />
         </div>
       </div>
 
