@@ -220,7 +220,10 @@ async function persistInboundMedia(
   try {
     const authHeader =
       'Basic ' + Buffer.from(`${env.TWILIO_ACCOUNT_SID}:${env.TWILIO_AUTH_TOKEN}`).toString('base64');
-    const upstream = await fetch(twilioUrl, { headers: { Authorization: authHeader } });
+    const upstream = await fetch(twilioUrl, {
+      headers: { Authorization: authHeader },
+      signal: AbortSignal.timeout(20_000),
+    });
     if (!upstream.ok) {
       logger.warn({ messageId, status: upstream.status }, 'inbound media persist: upstream non-OK');
       return;

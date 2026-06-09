@@ -38,6 +38,11 @@ function getTransporter(): Transporter {
       port: env.SMTP_PORT,
       secure,
       auth: { user: env.SMTP_USER!, pass: env.SMTP_PASS! },
+      // Fail fast instead of hanging forever if the host blocks outbound SMTP
+      // (common on cloud platforms, especially port 465).
+      connectionTimeout: 15_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000,
     });
   }
   return transporter;

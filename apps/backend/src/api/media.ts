@@ -44,10 +44,14 @@ async function loadMediaBytes(
 
   let upstream: Response;
   try {
-    upstream = await fetch(mediaUrl, { headers: { Authorization: authHeader } });
+    upstream = await fetch(mediaUrl, {
+      headers: { Authorization: authHeader },
+      signal: AbortSignal.timeout(20_000),
+    });
   } catch (err) {
     logger.error({ err, id }, 'media fetch failed');
-    throw new ApiError(502, 'MEDIA_FETCH_FAILED', 'Could not fetch media from Twilio.');
+    const reason = (err as Error)?.name === 'TimeoutError' ? 'timed out fetching from Twilio' : 'could not reach Twilio';
+    throw new ApiError(502, 'MEDIA_FETCH_FAILED', `Media fetch failed: ${reason}.`);
   }
   if (!upstream.ok) {
     logger.warn({ id, status: upstream.status }, 'media upstream non-OK');
