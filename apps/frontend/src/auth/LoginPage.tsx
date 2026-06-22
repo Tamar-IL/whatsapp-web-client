@@ -34,7 +34,7 @@ export function LoginPage() {
         autoComplete="on"
       >
         <h1 className="mb-1 text-2xl font-semibold text-brand-primary">Sign in</h1>
-        <p className="mb-6 text-sm text-ink-muted">Manage your WhatsApp Business conversations.</p>
+        <p className="mb-6 text-sm text-ink-muted">Manage your Business conversations.</p>
 
         <label className="mb-1 block text-sm font-medium text-ink" htmlFor="email">
           Email
@@ -48,7 +48,7 @@ export function LoginPage() {
           autoComplete="username"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
-          className="mb-4 w-full rounded border border-gray-300 px-3 py-2 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+          className="mb-4 w-full rounded border border-gray-300 bg-white px-3 py-2 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
         />
 
         <label className="mb-1 block text-sm font-medium text-ink" htmlFor="password">
@@ -62,7 +62,7 @@ export function LoginPage() {
           autoComplete="current-password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="mb-4 w-full rounded border border-gray-300 px-3 py-2 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
+          className="mb-4 w-full rounded border border-gray-300 bg-white px-3 py-2 focus:border-brand-primary focus:outline-none focus:ring-1 focus:ring-brand-primary"
         />
 
         {error && (
