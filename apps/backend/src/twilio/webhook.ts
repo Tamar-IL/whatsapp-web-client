@@ -7,6 +7,7 @@ import { withOutbox } from '../realtime/outbox';
 import { mapTwilioStatus, statusRank, syntheticConversationSid } from './programmable';
 import { env } from '../config/env';
 import { saveMedia } from '../lib/mediaStore';
+import { queueMediaForWebhook } from '../lib/makeWebhook';
 import type { MessageType } from '@prisma/client';
 
 /**
@@ -202,7 +203,12 @@ async function handleInbound(
   // Basic auth), which is what made old recordings show "Media unavailable".
   // Once stored, /api/media/:id serves our local copy instead of re-fetching.
   if (mediaUrl && created?.id) {
-    await persistInboundMedia(created.id, mediaUrl, mediaMime);
+    await persistInboundMedia(created.id, mediaUrl, mediaMime, {
+      phone: customerPhone,
+      senderName: profileName ?? customerPhone,
+      sentAt: now,
+      type,
+    });
   }
 }
 
@@ -212,10 +218,18 @@ async function handleInbound(
  * effort: on any failure we leave the original Twilio URL in place so the
  * on-demand proxy in api/media.ts can still try to fetch it later.
  */
+interface InboundMeta {
+  phone: string;
+  senderName: string;
+  sentAt: Date;
+  type: MessageType;
+}
+
 async function persistInboundMedia(
   messageId: string,
   twilioUrl: string,
   mime: string | undefined,
+  meta: InboundMeta,
 ): Promise<void> {
   try {
     const authHeader =
@@ -240,6 +254,17 @@ async function persistInboundMedia(
       await prisma.message.update({ where: { id: messageId }, data: { mediaMime: resolvedMime } });
     }
     logger.info({ messageId, bytes: buf.length }, 'inbound media cached locally (Twilio URL kept as fallback)');
+
+    // Forward to Make.com (debounced — batches bursts from the same contact).
+    queueMediaForWebhook({
+      phone: meta.phone,
+      senderName: meta.senderName,
+      sentAt: meta.sentAt,
+      type: meta.type,
+      mime: resolvedMime ?? 'application/octet-stream',
+      name: null,
+      buf,
+    });
   } catch (err) {
     logger.error({ err, messageId }, 'inbound media persist failed (kept Twilio URL)');
   }

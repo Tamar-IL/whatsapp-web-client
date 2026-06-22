@@ -41,6 +41,10 @@ const schema = z.object({
   // Where "email me this recording" delivers to.
   MEDIA_EMAIL_TO: z.string().email().default('swenlly123@gmail.com'),
 
+  // Make.com webhook URL for forwarding inbound media (bypasses NetFree).
+  // Leave unset to disable.
+  MAKE_WEBHOOK_URL: z.string().url().optional(),
+
   MEDIA_STORAGE_PATH: z.string().default('./storage'),
   // Max upload accepted into the server. Source videos are auto-compressed down
   // to fit WhatsApp's 16MB cap, so this is the cap on the ORIGINAL file the
