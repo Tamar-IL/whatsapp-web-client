@@ -45,6 +45,8 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [detail, setDetail] = useState<ConversationDetail | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
   const [windowOpen, setWindowOpen] = useState(true);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
@@ -82,7 +84,10 @@ export function ConversationView({ conversationId }: { conversationId: string | 
       .catch(() => setDetail(null));
 
     api<{ messages: ChatMessage[] }>(`/api/conversations/${conversationId}/messages`)
-      .then((r) => setMessages(r.messages))
+      .then((r) => {
+        setMessages(r.messages);
+        setHasMore(r.messages.length === 50);
+      })
       .catch(() => setMessages([]))
       .finally(() => setLoading(false));
 
@@ -135,6 +140,22 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  const loadMore = useCallback(() => {
+    if (!conversationId || loadingMore || !hasMore) return;
+    const oldest = messages[0];
+    if (!oldest) return;
+    setLoadingMore(true);
+    api<{ messages: ChatMessage[] }>(
+      `/api/conversations/${conversationId}/messages?before=${oldest.id}`,
+    )
+      .then((r) => {
+        setMessages((prev) => [...r.messages, ...prev]);
+        setHasMore(r.messages.length === 50);
+      })
+      .catch(() => undefined)
+      .finally(() => setLoadingMore(false));
+  }, [conversationId, loadingMore, hasMore, messages]);
 
   const handleSent = useCallback((m: ChatMessage) => {
     setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
@@ -192,6 +213,17 @@ export function ConversationView({ conversationId }: { conversationId: string | 
           <div className="text-center text-sm text-ink-muted">No messages yet.</div>
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
+          {hasMore && (
+            <div className="py-2 text-center">
+              <button
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="rounded px-4 py-1.5 text-xs text-ink-muted hover:bg-surface-hover disabled:opacity-50"
+              >
+                {loadingMore ? 'טוען…' : 'טען הודעות קודמות'}
+              </button>
+            </div>
+          )}
           {messages.map((m) => (
             <Bubble
               key={m.id}
