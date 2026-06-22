@@ -1,57 +1,15 @@
-import nodemailer, { type Transporter } from 'nodemailer';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
 import { ApiError } from './errors';
-
-/**
- * Outgoing email via SMTP (Zoho).
- *
- * Used by the "email me this recording" action: the SERVER fetches the media and
- * mails it as an attachment, so the bytes never travel through the operator's
- * (NetFree-filtered) browser. That's the whole point — a direct download gets
- * swapped for a NetFree block page, but an email attachment sidesteps it.
- *
- * Sending requires SMTP credentials (NOT IMAP — IMAP only reads mail). Until
- * SMTP_USER + SMTP_PASS are set the feature returns a clear 503 instead of
- * silently doing nothing.
- */
-
-let transporter: Transporter | null = null;
-
-export function mailerConfigured(): boolean {
-  return Boolean(env.SMTP_USER && env.SMTP_PASS);
-}
-
-function getTransporter(): Transporter {
-  if (!mailerConfigured()) {
-    throw new ApiError(
-      503,
-      'MAIL_NOT_CONFIGURED',
-      'Email is not set up yet. Add Zoho SMTP_USER and SMTP_PASS to the server environment.',
-    );
-  }
-  if (!transporter) {
-    // Auto-pick TLS mode from the port unless explicitly overridden.
-    const secure = env.SMTP_SECURE ? env.SMTP_SECURE === 'true' : env.SMTP_PORT === 465;
-    transporter = nodemailer.createTransport({
-      host: env.SMTP_HOST,
-      port: env.SMTP_PORT,
-      secure,
-      auth: { user: env.SMTP_USER!, pass: env.SMTP_PASS! },
-      // Fail fast instead of hanging forever if the host blocks outbound SMTP
-      // (common on cloud platforms, especially port 465).
-      connectionTimeout: 15_000,
-      greetingTimeout: 10_000,
-      socketTimeout: 20_000,
-    });
-  }
-  return transporter;
-}
 
 export interface MailAttachment {
   filename: string;
   content: Buffer;
   contentType?: string;
+}
+
+export function mailerConfigured(): boolean {
+  return Boolean(env.RESEND_API_KEY);
 }
 
 export async function sendMail(opts: {
@@ -60,14 +18,38 @@ export async function sendMail(opts: {
   text: string;
   attachments?: MailAttachment[];
 }): Promise<void> {
-  const t = getTransporter();
-  const from = env.MAIL_FROM || env.SMTP_USER!;
-  await t.sendMail({
+  if (!env.RESEND_API_KEY) {
+    throw new ApiError(503, 'MAIL_NOT_CONFIGURED', 'Email is not set up. Add RESEND_API_KEY to the server environment.');
+  }
+
+  const from = env.MAIL_FROM ?? 'WhatsApp <onboarding@resend.dev>';
+
+  const body = {
     from,
-    to: opts.to,
+    to: [opts.to],
     subject: opts.subject,
     text: opts.text,
-    attachments: opts.attachments,
+    attachments: opts.attachments?.map((a) => ({
+      filename: a.filename,
+      content: a.content.toString('base64'),
+    })),
+  };
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15_000),
   });
-  logger.info({ to: opts.to, subject: opts.subject }, 'media email sent');
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    logger.error({ status: res.status, detail }, 'resend email failed');
+    throw new ApiError(502, 'EMAIL_SEND_FAILED', `Resend error ${res.status}: ${detail}`);
+  }
+
+  logger.info({ to: opts.to, subject: opts.subject }, 'email sent via Resend');
 }

@@ -48,6 +48,9 @@ const schema = z.object({
   // Groq API key for Whisper audio transcription. Leave unset to disable.
   GROQ_API_KEY: z.string().optional(),
 
+  // Resend API key for transactional email (replaces SMTP which Railway blocks).
+  RESEND_API_KEY: z.string().optional(),
+
   MEDIA_STORAGE_PATH: z.string().default('./storage'),
   // Max upload accepted into the server. Source videos are auto-compressed down
   // to fit WhatsApp's 16MB cap, so this is the cap on the ORIGINAL file the
