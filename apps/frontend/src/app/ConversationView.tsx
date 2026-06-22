@@ -112,8 +112,17 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     };
     const onUpdated = (data: { conversationId?: string; payload?: Record<string, unknown> }) => {
       if (data.conversationId !== conversationId || !data.payload) return;
-      const p = data.payload as { messageId: string; status: string };
-      setMessages((prev) => prev.map((m) => (m.id === p.messageId ? { ...m, status: p.status } : m)));
+      const p = data.payload as { messageId: string; status?: string; body?: string };
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== p.messageId) return m;
+          return {
+            ...m,
+            ...(p.status !== undefined && { status: p.status }),
+            ...(p.body !== undefined && { body: p.body }),
+          };
+        }),
+      );
     };
     socket.on('message.added', onAdded);
     socket.on('message.updated', onUpdated);

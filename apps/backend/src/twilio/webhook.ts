@@ -8,6 +8,7 @@ import { mapTwilioStatus, statusRank, syntheticConversationSid } from './program
 import { env } from '../config/env';
 import { saveMedia } from '../lib/mediaStore';
 import { queueMediaForWebhook } from '../lib/makeWebhook';
+import { transcribeAudio } from '../lib/transcribe';
 import type { MessageType } from '@prisma/client';
 
 /**
@@ -254,6 +255,27 @@ async function persistInboundMedia(
       await prisma.message.update({ where: { id: messageId }, data: { mediaMime: resolvedMime } });
     }
     logger.info({ messageId, bytes: buf.length }, 'inbound media cached locally (Twilio URL kept as fallback)');
+
+    // Transcribe audio and update the message body so it shows in the chat.
+    if (meta.type === 'audio') {
+      const transcript = await transcribeAudio(buf, resolvedMime ?? 'audio/ogg');
+      if (transcript) {
+        const msg = await prisma.message.findUnique({
+          where: { id: messageId },
+          select: { conversationId: true },
+        });
+        if (msg) {
+          await withOutbox(async (tx, emit) => {
+            await tx.message.update({ where: { id: messageId }, data: { body: transcript } });
+            await emit({
+              kind: 'message.updated',
+              conversationId: msg.conversationId,
+              payload: { messageId, body: transcript },
+            });
+          });
+        }
+      }
+    }
 
     // Forward to Make.com (debounced — batches bursts from the same contact).
     queueMediaForWebhook({

@@ -45,6 +45,9 @@ const schema = z.object({
   // Leave unset to disable.
   MAKE_WEBHOOK_URL: z.string().url().optional(),
 
+  // Groq API key for Whisper audio transcription. Leave unset to disable.
+  GROQ_API_KEY: z.string().optional(),
+
   MEDIA_STORAGE_PATH: z.string().default('./storage'),
   // Max upload accepted into the server. Source videos are auto-compressed down
   // to fit WhatsApp's 16MB cap, so this is the cap on the ORIGINAL file the
