@@ -1,0 +1,27 @@
+name: Build and Push to Docker Hub
+
+on:
+  push:
+    branches:
+      - main # או master, תלוי בשם של הבראנץ' הראשי שלך
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          # החליפי את my-app-name בשם שאת רוצה לתת לאפליקציה שלך
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-app-name:latest
