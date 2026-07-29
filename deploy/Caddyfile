@@ -1,0 +1,30 @@
+# Reverse proxy for the WhatsApp Web Client.
+#
+# Both values come from environment variables set in docker-compose.yml (.env):
+#
+#   IP-only phase (no domain yet):
+#     SITE_ADDRESS=:443
+#     TLS_OPTS=internal          # Caddy issues a self-signed cert.
+#                                # Browsers show a one-time warning; login works
+#                                # because the connection is real HTTPS (secure
+#                                # cookies require it).
+#
+#   With a domain (recommended once DNS points at the server):
+#     SITE_ADDRESS=chat.example.com
+#     TLS_OPTS=you@example.com   # Caddy obtains & renews a Let's Encrypt cert.
+#
+# Caddy transparently proxies WebSocket upgrades, so Socket.IO works with no
+# extra configuration.
+
+{$SITE_ADDRESS} {
+	encode zstd gzip
+
+	reverse_proxy app:3000 {
+		# Preserve the client's scheme/host so the app builds correct URLs and
+		# express-session sees a secure connection (trust proxy = 1).
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	tls {$TLS_OPTS}
+}

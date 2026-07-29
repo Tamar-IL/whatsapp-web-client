@@ -1,0 +1,73 @@
+# Self-hosted stack for the WhatsApp Web Client (Hetzner or any Docker host).
+#
+#   app    – Express backend that also serves the built React frontend.
+#   db     – PostgreSQL 16 with a persistent named volume.
+#   caddy  – Reverse proxy terminating TLS in front of the app.
+#
+# Usage:
+#   cp .env.production.example .env
+#   # edit .env (secrets, Twilio, admin, SITE_ADDRESS)
+#   docker compose up -d --build
+#
+# All configuration comes from the .env file in this directory.
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Not published to the host — only reachable by the app over the internal network.
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Force the in-cluster DB host regardless of what a copied .env contains.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+      MEDIA_STORAGE_PATH: /app/apps/backend/storage
+    volumes:
+      - media:/app/apps/backend/storage
+    # Not published to the host — traffic arrives through Caddy only.
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # See .env — ":443" for IP-only self-signed, or your domain for Let's Encrypt.
+      SITE_ADDRESS: ${SITE_ADDRESS}
+      # "internal" (self-signed) for the IP-only phase, or your email for ACME.
+      TLS_OPTS: ${TLS_OPTS}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  media:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,35 @@
+# Keep the build context small and prevent host artifacts from leaking into the image.
+node_modules
+**/node_modules
+dist
+**/dist
+build
+**/build
+*.tsbuildinfo
+
+# Local env / secrets — provided at runtime via env_file, never baked into the image.
+.env
+.env.*
+!.env.example
+!.env.production.example
+apps/*/.env
+apps/*/.env.*
+!apps/*/.env.example
+
+# VCS / editor / CI
+.git
+.github
+.gitignore
+.idea
+.vscode
+*.swp
+
+# Local media & logs
+apps/backend/storage/
+apps/backend/media/
+apps/backend/tmp/
+logs/
+*.log
+
+# Docs are not needed inside the runtime image
+docs/
