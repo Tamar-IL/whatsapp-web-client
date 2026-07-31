@@ -23,5 +23,4 @@ jobs:
         with:
           context: .
           push: true
-          # החליפי את my-app-name בשם שאת רוצה לתת לאפליקציה שלך
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/my-app-name:latest
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/whatsapp-web-client:latest
