@@ -28,6 +28,9 @@ export interface ChatMessage {
   replyTo?: { id: string; body: string | null; direction: string; type: string } | null;
 }
 
+/** Messages fetched per request. The server caps `limit` at 100. */
+const PAGE_SIZE = 100;
+
 interface ContactInfo {
   id: string;
   phoneNumber: string;
@@ -53,6 +56,7 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const { socket } = useRealtime();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const skipAutoScroll = useRef(false);
 
   // Scroll to + briefly highlight a message (used when clicking a quote box).
   const scrollToMessage = useCallback((id: string) => {
@@ -83,10 +87,12 @@ export function ConversationView({ conversationId }: { conversationId: string | 
       })
       .catch(() => setDetail(null));
 
-    api<{ messages: ChatMessage[] }>(`/api/conversations/${conversationId}/messages`)
+    api<{ messages: ChatMessage[] }>(
+      `/api/conversations/${conversationId}/messages?limit=${PAGE_SIZE}`,
+    )
       .then((r) => {
         setMessages(r.messages);
-        setHasMore(r.messages.length === 50);
+        setHasMore(r.messages.length === PAGE_SIZE);
       })
       .catch(() => setMessages([]))
       .finally(() => setLoading(false));
@@ -138,6 +144,11 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   }, [socket, conversationId]);
 
   useEffect(() => {
+    // Prepending older messages must not yank the view back to the bottom.
+    if (skipAutoScroll.current) {
+      skipAutoScroll.current = false;
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -146,12 +157,19 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     const oldest = messages[0];
     if (!oldest) return;
     setLoadingMore(true);
+    // `before` is a sentAt timestamp on the server, not a message id.
     api<{ messages: ChatMessage[] }>(
-      `/api/conversations/${conversationId}/messages?before=${oldest.id}`,
+      `/api/conversations/${conversationId}/messages?limit=${PAGE_SIZE}` +
+        `&before=${encodeURIComponent(oldest.sentAt)}`,
     )
       .then((r) => {
-        setMessages((prev) => [...r.messages, ...prev]);
-        setHasMore(r.messages.length === 50);
+        setHasMore(r.messages.length === PAGE_SIZE);
+        if (r.messages.length === 0) return;
+        skipAutoScroll.current = true;
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          return [...r.messages.filter((m) => !seen.has(m.id)), ...prev];
+        });
       })
       .catch(() => undefined)
       .finally(() => setLoadingMore(false));
