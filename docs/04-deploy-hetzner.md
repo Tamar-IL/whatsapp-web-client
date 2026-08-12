@@ -163,6 +163,23 @@ docker compose restart app
 docker compose down            # stop (data in named volumes is kept)
 ```
 
+**After editing `.env`:** `restart` re-runs the process with the environment the
+container was *created* with, so a changed secret appears to be ignored. Recreate
+instead:
+
+```bash
+docker compose up -d --force-recreate app
+```
+
+**Check outgoing email (Resend):**
+
+```bash
+docker compose run --rm app npm run mail-check
+```
+
+Prints how the API key looks, then attempts one real send and explains whatever
+Resend answers (`401` = key not recognised, `403` = `from` address not allowed).
+
 **Back up the database:**
 
 ```bash

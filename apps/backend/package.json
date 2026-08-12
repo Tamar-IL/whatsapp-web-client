@@ -16,7 +16,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
-    "hash-password": "tsx scripts/hash-password.ts"
+    "hash-password": "tsx scripts/hash-password.ts",
+    "mail-check": "tsx scripts/mail-check.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
