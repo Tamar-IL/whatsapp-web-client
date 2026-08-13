@@ -76,14 +76,16 @@ export function EmailMediaButton({
           }}
           placeholder="Add a note (optional)"
           aria-label="Note to send with the file"
-          className="w-44 rounded border border-black/15 bg-white px-1.5 py-0.5 text-xs
-                     outline-none focus:border-brand-primary disabled:opacity-60"
+          className="w-52 rounded-full border border-black/15 bg-white px-3.5 py-1.5 text-xs
+                     outline-none transition focus:border-brand-primary
+                     focus:ring-1 focus:ring-brand-primary disabled:opacity-60"
         />
         <button
           type="button"
           onClick={() => void send()}
           disabled={sending}
-          className="rounded bg-brand-primary px-1.5 py-0.5 text-xs text-white disabled:opacity-60"
+          className="rounded-full bg-brand-primary px-4 py-1.5 text-xs font-medium text-white
+                     transition hover:opacity-90 disabled:opacity-60"
         >
           {sending ? 'Sending…' : 'Send'}
         </button>
@@ -95,7 +97,7 @@ export function EmailMediaButton({
               setNote('');
             }}
             title="Cancel"
-            className="px-1 text-xs text-ink-muted hover:text-ink"
+            className="rounded-full px-2 py-1.5 text-xs text-ink-muted transition hover:bg-black/5 hover:text-ink"
           >
             ✕
           </button>

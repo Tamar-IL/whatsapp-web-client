@@ -6,9 +6,35 @@
  * press Send/Enter (optionally with the text as a caption). A × removes the stage.
  * 24h window closed → server returns 409 WINDOW_CLOSED → show template notice.
  */
-import { type ChangeEvent, type FormEvent, type KeyboardEvent, useRef, useState } from 'react';
+import {
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { api, apiUpload, ApiError } from '../api/client';
 import type { ChatMessage } from './ConversationView';
+
+/**
+ * Emoji offered by the picker, in the order they appear.
+ *
+ * A hand-picked common set rather than a full Unicode browser: this is for
+ * dropping a 👍 or a ❤️ into a reply, not for hunting an obscure glyph. Grouped
+ * loosely — faces, hands, hearts, then everyday symbols — so the eye can land on
+ * the right region quickly.
+ */
+const EMOJI = [
+  '😀', '😂', '🤣', '🙂', '😉', '😊', '😍', '🥰',
+  '😘', '😎', '🤔', '🤗', '😅', '😢', '😭', '😡',
+  '🥳', '😴', '🤦', '🤷', '😱', '🤩', '😇', '🙃',
+  '👍', '👎', '👌', '🙏', '👏', '💪', '🤝', '✌️',
+  '👋', '☝️', '🤞', '🫶', '❤️', '🧡', '💛', '💚',
+  '💙', '💜', '🖤', '💔', '💕', '✨', '🔥', '⭐',
+  '🎉', '🎁', '✅', '❌', '❗', '❓', '💯', '👀',
+  '☀️', '🌙', '📞', '📩', '⏰', '🚗', '🏠', '🍀',
+];
 
 function newClientId(): string {
   return 'c_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -64,8 +90,51 @@ export function InputBar({
   const [showSchedule, setShowSchedule] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [customWhen, setCustomWhen] = useState('');
+  const [showEmoji, setShowEmoji] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Close the emoji picker on Escape or a click outside it. Clicks inside any
+  // emoji UI are ignored so the toggle button still works — otherwise mousedown
+  // would close it and the click right after would reopen it.
+  useEffect(() => {
+    if (!showEmoji) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setShowEmoji(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest?.('[data-emoji-ui]')) setShowEmoji(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [showEmoji]);
+
+  /**
+   * Insert an emoji at the caret (replacing any selection), rather than
+   * appending. Someone who clicks into the middle of a sentence to add a 🙂
+   * means it to land there.
+   */
+  function insertEmoji(emoji: string) {
+    const ta = taRef.current;
+    if (!ta) {
+      onChangeText(text + emoji);
+      return;
+    }
+    const start = ta.selectionStart ?? text.length;
+    const end = ta.selectionEnd ?? start;
+    onChangeText(text.slice(0, start) + emoji + text.slice(end));
+    // Wait a frame: React has to write the new value before the caret can be
+    // placed after the emoji, otherwise it snaps back to the old position.
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + emoji.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }
 
   function autoGrow() {
     const ta = taRef.current;
@@ -308,6 +377,41 @@ export function InputBar({
         </div>
       )}
 
+      {/* Emoji picker. Inserts into the text — the message then sends as any
+          other text message, with no special handling. */}
+      {showEmoji && (
+        <div
+          data-emoji-ui
+          className="absolute bottom-full left-4 z-20 mb-2 w-[19rem] rounded-2xl border
+                     border-gray-200 bg-white p-2.5 shadow-lg"
+        >
+          <div className="mb-1.5 flex items-center justify-between px-1">
+            <span className="text-xs font-semibold text-ink">אימוג'י</span>
+            <button
+              type="button"
+              onClick={() => setShowEmoji(false)}
+              className="rounded-full px-2 text-lg leading-none text-ink-muted hover:text-red-600"
+              title="Close"
+            >
+              ×
+            </button>
+          </div>
+          <div className="scroll-thin grid max-h-52 grid-cols-8 gap-0.5 overflow-y-auto">
+            {EMOJI.map((e) => (
+              <button
+                key={e}
+                type="button"
+                onClick={() => insertEmoji(e)}
+                title={e}
+                className="rounded-lg p-1.5 text-xl leading-none transition hover:bg-black/5"
+              >
+                {e}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Replying-to bar */}
       {replyingTo && (
         <div className="mb-2 flex items-center gap-2 rounded-lg border-l-4 border-brand-link bg-brand-action/10 px-3 py-2">
@@ -415,6 +519,25 @@ export function InputBar({
               </svg>
             </button>
           )}
+          {/* Emoji — next to the clock. Stays available with a file staged, so
+              a caption can carry one too. */}
+          <button
+            type="button"
+            data-emoji-ui
+            title="Emoji"
+            aria-label="Insert emoji"
+            aria-expanded={showEmoji}
+            onClick={() => setShowEmoji((s) => !s)}
+            disabled={sending}
+            className={
+              'shrink-0 leading-none transition disabled:opacity-50 ' +
+              (showEmoji ? 'text-brand-primary' : 'text-ink-muted hover:text-brand-primary')
+            }
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+              <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 18a8 8 0 110-16 8 8 0 010 16zM8.5 11a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm7 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM12 17.5c2.33 0 4.31-1.46 5-3.5H7c.69 2.04 2.67 3.5 5 3.5z" />
+            </svg>
+          </button>
           <textarea
             ref={taRef}
             value={text}
