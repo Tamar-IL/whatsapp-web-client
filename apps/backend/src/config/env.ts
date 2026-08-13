@@ -42,6 +42,15 @@ const schema = z.object({
   // Where "email me this recording" delivers to.
   MEDIA_EMAIL_TO: z.string().email().default('swenlly123@gmail.com'),
 
+  // Country calling code (digits, no "+") used to expand phone numbers typed in
+  // LOCAL form when starting a new chat — "0501234567" becomes "+972501234567".
+  // The leading 0 is a national prefix and is dropped. Numbers typed with a
+  // leading "+" are used as-is and never touch this.
+  DEFAULT_COUNTRY_CODE: z
+    .string()
+    .regex(/^\d{1,4}$/, 'DEFAULT_COUNTRY_CODE must be digits only, e.g. 972')
+    .default('972'),
+
   // Make.com webhook URL for forwarding inbound media (bypasses NetFree).
   // Leave unset to disable.
   MAKE_WEBHOOK_URL: z.string().url().optional(),

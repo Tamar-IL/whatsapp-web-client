@@ -30,7 +30,23 @@ export function ChatList({
   const [items, setItems] = useState<ConversationListItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [showNew, setShowNew] = useState(false);
+  const [newPhone, setNewPhone] = useState('');
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [newError, setNewError] = useState<string | null>(null);
+  // Read from the server rather than hardcoded, so the hint can never disagree
+  // with the DEFAULT_COUNTRY_CODE the backend actually applies.
+  const [countryCode, setCountryCode] = useState('972');
   const { socket } = useRealtime();
+
+  useEffect(() => {
+    api<{ config?: { defaultCountryCode?: string } }>('/api/auth/me')
+      .then((r) => {
+        if (r.config?.defaultCountryCode) setCountryCode(r.config.defaultCountryCode);
+      })
+      .catch(() => undefined);
+  }, []);
 
   const load = useCallback(() => {
     api<{ conversations: ConversationListItem[] }>('/api/conversations')
@@ -65,8 +81,96 @@ export function ChatList({
     });
   }, [items, query]);
 
+  async function createChat(e: React.FormEvent) {
+    e.preventDefault();
+    if (creating) return;
+    setCreating(true);
+    setNewError(null);
+    try {
+      const r = await api<{ conversation: { id: string }; existing: boolean }>('/api/conversations', {
+        method: 'POST',
+        body: { phoneNumber: newPhone, displayName: newName.trim() || undefined },
+      });
+      setShowNew(false);
+      setNewPhone('');
+      setNewName('');
+      load();
+      // Opening the chat lands the operator on the template-only bar, which is
+      // the only thing they can do with a contact who has never written.
+      onSelect(r.conversation.id);
+    } catch (err) {
+      setNewError((err as Error)?.message ?? 'Could not start the chat.');
+    } finally {
+      setCreating(false);
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      {/* New chat */}
+      <div className="border-b border-gray-200 px-2 pt-2">
+        {!showNew ? (
+          <button
+            type="button"
+            onClick={() => {
+              setShowNew(true);
+              setNewError(null);
+            }}
+            className="flex w-full items-center justify-center gap-1.5 rounded-full bg-brand-primary
+                       px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+          >
+            <span className="text-base leading-none">＋</span> New chat
+          </button>
+        ) : (
+          <form onSubmit={createChat} className="flex flex-col gap-1.5 pb-1">
+            <input
+              autoFocus
+              value={newPhone}
+              onChange={(e) => setNewPhone(e.target.value)}
+              placeholder="+972501234567"
+              inputMode="tel"
+              dir="ltr"
+              className="rounded-full border border-gray-300 px-3.5 py-1.5 text-sm
+                         focus:border-brand-primary focus:outline-none"
+            />
+            {/* The country code is optional, not absent — spell that out, or a
+                number for another country looks impossible to enter. */}
+            <p className="px-2 text-[11px] leading-tight text-ink-muted">
+              Type the full number with its country code (+972, +1, +44…). A number starting with 0
+              is treated as local (+{countryCode}).
+            </p>
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Name (optional)"
+              className="rounded-full border border-gray-300 px-3.5 py-1.5 text-sm
+                         focus:border-brand-primary focus:outline-none"
+            />
+            {newError && <div className="px-1 text-xs text-red-600">{newError}</div>}
+            <div className="flex gap-1.5">
+              <button
+                type="submit"
+                disabled={creating || !newPhone.trim()}
+                className="flex-1 rounded-full bg-brand-primary px-4 py-1.5 text-sm font-medium
+                           text-white transition hover:opacity-90 disabled:opacity-50"
+              >
+                {creating ? 'Starting…' : 'Start'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNew(false);
+                  setNewError(null);
+                }}
+                className="rounded-full px-4 py-1.5 text-sm text-ink-muted hover:bg-black/5"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
       {/* Search */}
       <div className="border-b border-gray-200 p-2">
         <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5">

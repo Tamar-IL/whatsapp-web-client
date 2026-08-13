@@ -6,6 +6,7 @@ import { prisma } from '../db/prisma';
 import { asyncHandler } from '../lib/asyncHandler';
 import { ApiError } from '../lib/errors';
 import { requireAuth } from './middleware';
+import { env } from '../config/env';
 
 const loginLimiter = rateLimit({
   windowMs: 15 * 60_000,
@@ -74,6 +75,7 @@ authRouter.get(
       select: { id: true, email: true, createdAt: true },
     });
     if (!user) throw new ApiError(401, 'UNAUTHENTICATED', 'Session invalid.');
-    res.json({ user });
+    // Server-side settings the UI has to describe accurately rather than guess.
+    res.json({ user, config: { defaultCountryCode: env.DEFAULT_COUNTRY_CODE } });
   }),
 );

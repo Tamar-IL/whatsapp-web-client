@@ -15,6 +15,7 @@ import {
   useState,
 } from 'react';
 import { api, apiUpload, ApiError } from '../api/client';
+import { TemplateModal } from './TemplateModal';
 import type { ChatMessage } from './ConversationView';
 
 /**
@@ -91,6 +92,7 @@ export function InputBar({
   const [scheduling, setScheduling] = useState(false);
   const [customWhen, setCustomWhen] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
@@ -310,8 +312,24 @@ export function InputBar({
   if (!windowOpen) {
     return (
       <div className="border-t border-black/10 bg-[#f0f2f5] px-4 py-3 text-center text-sm text-ink-muted">
-        The 24-hour window is closed. You can only reply with an approved template message.
-        <span className="ml-1 italic">(Template sending — Phase 6.)</span>
+        <div>
+          The 24-hour window is closed. You can only reply with an approved template message.
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowTemplates(true)}
+          className="mt-2 rounded-full bg-brand-primary px-5 py-2 text-sm font-medium text-white
+                     transition hover:opacity-90"
+        >
+          Send template
+        </button>
+        {showTemplates && (
+          <TemplateModal
+            conversationId={conversationId}
+            onClose={() => setShowTemplates(false)}
+            onSent={onSent}
+          />
+        )}
       </div>
     );
   }
@@ -538,6 +556,20 @@ export function InputBar({
               <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 18a8 8 0 110-16 8 8 0 010 16zM8.5 11a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm7 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM12 17.5c2.33 0 4.31-1.46 5-3.5H7c.69 2.04 2.67 3.5 5 3.5z" />
             </svg>
           </button>
+          {/* Templates — also reachable while the window is open, so a stock
+              greeting doesn't have to be retyped just because the chat is live. */}
+          <button
+            type="button"
+            title="Send a template"
+            aria-label="Send a template"
+            onClick={() => setShowTemplates(true)}
+            disabled={sending}
+            className="shrink-0 leading-none text-ink-muted transition hover:text-brand-primary disabled:opacity-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 7V3.5L18.5 9H13zM8 13h8v1.5H8V13zm0 3.5h8V18H8v-1.5z" />
+            </svg>
+          </button>
           <textarea
             ref={taRef}
             value={text}
@@ -549,6 +581,14 @@ export function InputBar({
           />
         </div>
       </div>
+
+      {showTemplates && (
+        <TemplateModal
+          conversationId={conversationId}
+          onClose={() => setShowTemplates(false)}
+          onSent={onSent}
+        />
+      )}
     </form>
   );
 }
