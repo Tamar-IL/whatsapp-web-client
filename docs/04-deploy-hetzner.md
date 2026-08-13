@@ -186,10 +186,18 @@ hosts that block outbound SMTP ports. On this server SMTP works, so set:
 
 ```env
 SMTP_HOST=smtp.zoho.com     # smtp.zoho.eu for EU accounts
-SMTP_PORT=465               # try 587 with SMTP_SECURE=false if 465 times out
+SMTP_PORT=587               # NOT 465 — see below
+SMTP_SECURE=false           # 587 uses STARTTLS
 SMTP_USER=you@yourdomain.com
 SMTP_PASS=<Zoho app-specific password>
 ```
+
+> **Use port 587 on Hetzner.** Hetzner blocks outbound ports **25 and 465** by
+> default on all cloud servers as an anti-spam measure; **587 is open**. On 465
+> `mail-check` reports `FAIL - Connection timeout` at the *"Verifying the
+> connection"* stage — it never reaches a login, so this is not a credentials
+> problem. Hetzner will unblock 465 via a limit request once the account is about
+> a month old with a paid invoice, but 587 is equivalent and needs no ticket.
 
 `SMTP_PASS` must be an **app-specific password** if the Zoho account has 2FA
 (Zoho → My Account → Security → App Passwords), not the normal login password.

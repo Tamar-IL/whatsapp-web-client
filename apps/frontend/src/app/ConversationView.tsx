@@ -4,7 +4,7 @@
  * Header (contact name, phone, 24h window badge), message bubbles (text + media),
  * realtime append, mark-read on open, and the input bar.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { useRealtime } from './RealtimeProvider';
 import { InputBar } from './InputBar';
@@ -45,6 +45,36 @@ const PAGE_SIZE = 100;
 
 /** Types that actually carry a file. Location/reaction/system are text-only. */
 const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'voice', 'document']);
+
+/**
+ * Local calendar day of a timestamp, as "YYYY-M-D".
+ *
+ * Built from the LOCAL getters, not from the ISO string: slicing the ISO text
+ * would group by UTC day, so anything sent after 03:00 Israel time would be
+ * filed under the wrong date — including "today" appearing as yesterday.
+ */
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** "היום" / "אתמול" / a full date, matching how WhatsApp labels day separators. */
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  if (dayKey(iso) === dayKey(now.toISOString())) return 'היום';
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (dayKey(iso) === dayKey(yesterday.toISOString())) return 'אתמול';
+
+  // Within the last week, the weekday is easier to place than a numeric date.
+  const ageDays = (now.getTime() - d.getTime()) / 86_400_000;
+  if (ageDays < 7) {
+    return d.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' });
+  }
+  return d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: 'numeric' });
+}
 
 /** Chronological order, with id as the tiebreaker for identical timestamps. */
 const bySentAt = (a: ChatMessage, b: ChatMessage): number =>
@@ -354,17 +384,25 @@ export function ConversationView({ conversationId }: { conversationId: string | 
               </button>
             </div>
           )}
-          {bubbles.map((m) => (
-            <Bubble
-              key={m.id}
-              message={m}
-              reactions={reactionsByTarget.get(m.id)}
-              onOpenImage={setLightbox}
-              onReply={setReplyingTo}
-              onQuoteClick={scrollToMessage}
-              highlighted={highlightedId === m.id}
-            />
-          ))}
+          {bubbles.map((m, i) => {
+            // A separator opens every new calendar day, so a bubble showing only
+            // "14:30" always sits under a heading saying which day that was.
+            const prev = bubbles[i - 1];
+            const newDay = !prev || dayKey(prev.sentAt) !== dayKey(m.sentAt);
+            return (
+              <Fragment key={m.id}>
+                {newDay && <DateDivider iso={m.sentAt} />}
+                <Bubble
+                  message={m}
+                  reactions={reactionsByTarget.get(m.id)}
+                  onOpenImage={setLightbox}
+                  onReply={setReplyingTo}
+                  onQuoteClick={scrollToMessage}
+                  highlighted={highlightedId === m.id}
+                />
+              </Fragment>
+            );
+          })}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -484,7 +522,9 @@ function Bubble({
         )}
         {message.body && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-ink-muted">
-          <span>{time}</span>
+          {/* Hover shows the full date — the bubble itself only has room for the
+              time, and the day separator above may have scrolled out of view. */}
+          <span title={new Date(message.sentAt).toLocaleString('he-IL')}>{time}</span>
           {outbound && <StatusTick status={message.status} />}
         </div>
         {/* Reaction chip, WhatsApp-style: overlapping the bubble's bottom corner. */}
@@ -507,6 +547,26 @@ function Bubble({
       </div>
       {/* Reply action (right of inbound bubbles) */}
       {!outbound && <ReplyButton onClick={() => onReply(message)} />}
+    </div>
+  );
+}
+
+/** Centred day heading between message groups, WhatsApp-style. */
+function DateDivider({ iso }: { iso: string }) {
+  return (
+    <div className="my-2 flex justify-center">
+      <span
+        className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-medium text-ink-muted shadow-sm"
+        // Hovering gives the exact date even when the label reads "היום".
+        title={new Date(iso).toLocaleDateString('he-IL', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        })}
+      >
+        {dayLabel(iso)}
+      </span>
     </div>
   );
 }

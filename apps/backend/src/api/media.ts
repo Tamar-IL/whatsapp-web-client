@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import { asyncHandler } from '../lib/asyncHandler';
 import { prisma } from '../db/prisma';
 import { env } from '../config/env';
@@ -96,17 +97,34 @@ mediaRouter.get(
   }),
 );
 
+/** Optional operator note, mailed alongside the file. */
+const emailMediaSchema = z.object({
+  note: z.string().max(500).optional(),
+});
+
+/** Keep the subject readable in an inbox list. */
+const SUBJECT_NOTE_MAX = 60;
+
 /**
  * POST /api/media/:id/email — mail this media to the operator as an attachment.
  *
  * The SERVER fetches the bytes and sends them via SMTP, so the file never goes
  * through the operator's NetFree-filtered browser (which turns a direct download
  * into a block page). Delivers to MEDIA_EMAIL_TO.
+ *
+ * Body: `{ note? }` — a free-text note typed when clicking "email to me". It
+ * goes in the subject (truncated) and at the TOP of the body, because the whole
+ * point is to label the file for your future self: several voice notes from the
+ * same contact are otherwise indistinguishable in an inbox.
  */
 mediaRouter.post(
   '/:id/email',
   asyncHandler(async (req, res) => {
     const id = req.params.id!;
+    const parsedBody = emailMediaSchema.safeParse(req.body ?? {});
+    if (!parsedBody.success) throw new ApiError(400, 'BAD_INPUT', 'Invalid note.');
+    // Collapse newlines so the note cannot fake extra header lines in the body.
+    const note = parsedBody.data.note?.replace(/\s+/g, ' ').trim() || null;
     const msg = await prisma.message.findUnique({
       where: { id },
       select: {
@@ -139,8 +157,14 @@ mediaRouter.post(
     }
     const sizeKb = Math.max(1, Math.round(buf.length / 1024));
 
-    const subject = `WhatsApp ${msg.type} from ${who}`;
+    const subjectNote = note
+      ? ` — ${note.length > SUBJECT_NOTE_MAX ? `${note.slice(0, SUBJECT_NOTE_MAX).trimEnd()}…` : note}`
+      : '';
+    const subject = `WhatsApp ${msg.type} from ${who}${subjectNote}`;
     const text = [
+      // The note leads: it is what you wrote to your future self, so it should
+      // be the first thing visible in a preview pane.
+      ...(note ? [`Note: ${note}`, ''] : []),
       `Here is the ${msg.type} you received on WhatsApp.`,
       '',
       `From:     ${who}${contact?.phoneNumber ? ` (${contact.phoneNumber})` : ''}`,
