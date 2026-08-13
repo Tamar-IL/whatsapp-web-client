@@ -81,16 +81,30 @@ conversationsRouter.get(
     const id = req.params.id!;
     const limit = Math.min(Number(req.query.limit) || 50, 100);
     const before = req.query.before as string | undefined;
+    const beforeId = req.query.beforeId as string | undefined;
 
     const conv = await prisma.conversation.findUnique({ where: { id }, select: { id: true } });
     if (!conv) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found.');
 
+    // Composite cursor (sentAt, id). `sentAt` alone is NOT unique — inbound
+    // messages are stamped with the webhook's receipt time, so a burst can share
+    // a millisecond. Paging on `sentAt < before` then skipped every message
+    // sharing the boundary timestamp, losing them from the history for good.
+    // `id` breaks the tie in both the filter and the sort.
+    const cursor = before
+      ? beforeId
+        ? {
+            OR: [
+              { sentAt: { lt: new Date(before) } },
+              { sentAt: new Date(before), id: { lt: beforeId } },
+            ],
+          }
+        : { sentAt: { lt: new Date(before) } }
+      : {};
+
     const messages = await prisma.message.findMany({
-      where: {
-        conversationId: id,
-        ...(before ? { sentAt: { lt: new Date(before) } } : {}),
-      },
-      orderBy: { sentAt: 'desc' },
+      where: { conversationId: id, ...cursor },
+      orderBy: [{ sentAt: 'desc' }, { id: 'desc' }],
       take: limit,
     });
 
@@ -105,6 +119,38 @@ conversationsRouter.get(
         })
       : [];
     const quotedMap = new Map(quotedRows.map((q) => [q.twilioSid, q]));
+
+    // Reactions on the messages in this page. They are stored as their own rows,
+    // so a reaction whose target sits in an older page would otherwise be
+    // invisible — fetching by target id keeps the emoji with its bubble no matter
+    // which page the target loaded in.
+    const reactionRows = await prisma.message.findMany({
+      where: { type: 'reaction', reactsToId: { in: messages.map((m) => m.id) } },
+      select: { id: true, body: true, direction: true, sentAt: true, reactsToId: true },
+      orderBy: { sentAt: 'asc' },
+    });
+    // Newest per (target, side) wins: re-reacting replaces the emoji, and a
+    // removal (empty body) clears it. Ascending order means the last write sticks.
+    //
+    // Removals are sent through as empty-emoji entries rather than being dropped
+    // here: the client merges this list with reaction rows it already holds, and
+    // it can only know a removal supersedes an emoji it has if the removal is
+    // visible with its timestamp.
+    type ReactionOut = { id: string; emoji: string; direction: string; sentAt: Date };
+    const latestReaction = new Map<string, ReactionOut>();
+    for (const r of reactionRows) {
+      if (!r.reactsToId) continue;
+      latestReaction.set(`${r.reactsToId}:${r.direction}`, {
+        id: r.id,
+        emoji: (r.body ?? '').trim(),
+        direction: r.direction,
+        sentAt: r.sentAt,
+      });
+    }
+    const reactionsFor = (messageId: string) =>
+      ['inbound', 'outbound']
+        .map((d) => latestReaction.get(`${messageId}:${d}`))
+        .filter((r): r is ReactionOut => Boolean(r));
 
     res.json({
       messages: messages.reverse().map((m) => {
@@ -127,6 +173,8 @@ conversationsRouter.get(
           replyTo: quoted
             ? { id: quoted.id, body: quoted.body, direction: quoted.direction, type: quoted.type }
             : null,
+          reactsToId: m.reactsToId,
+          reactions: reactionsFor(m.id),
         };
       }),
     });

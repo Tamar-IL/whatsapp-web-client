@@ -249,6 +249,18 @@ messagesRouter.post(
   }),
 );
 
-/** POST /api/messages/voice — Phase 5. POST /api/messages/:id/reaction — Phase 5. */
+/**
+ * POST /api/messages/voice — Phase 5.
+ *
+ * POST /api/messages/:id/reaction — NOT IMPLEMENTED, and not implementable.
+ * Twilio's Message resource accepts no parameter for reacting to (or replying
+ * to) a previous message, on either Programmable Messaging or Conversations.
+ * The only way to "send a reaction" would be to deliver the bare emoji as an
+ * ordinary text message and render it locally as a chip — which lies to the
+ * operator, since the emoji lands in the customer's chat with no link to the
+ * message it refers to and can never be unsent. Left as 501 deliberately.
+ * Revisit only if Twilio ships real reaction support.
+ */
 messagesRouter.post('/voice', (_req, res) => res.status(501).json({ code: 'NOT_IMPLEMENTED' }));
 messagesRouter.post('/:id/reaction', (_req, res) => res.status(501).json({ code: 'NOT_IMPLEMENTED' }));
+

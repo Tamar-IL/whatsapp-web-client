@@ -47,3 +47,8 @@ coverage/
 
 # Claude Code session data
 .claude/
+
+# Local deploy scratch — site archives and patch files are build output, not
+# source. whatsapp-site.tar in particular is >100MB, which GitHub rejects.
+*.tar
+*.patch

@@ -171,14 +171,39 @@ instead:
 docker compose up -d --force-recreate app
 ```
 
-**Check outgoing email (Resend):**
+**Check outgoing email:**
 
 ```bash
 docker compose run --rm app npm run mail-check
 ```
 
-Prints how the API key looks, then attempts one real send and explains whatever
-Resend answers (`401` = key not recognised, `403` = `from` address not allowed).
+Prints which transport the app will actually use, then attempts one real send and
+explains whatever the provider answers.
+
+Email sends over **Zoho SMTP** whenever `SMTP_USER` *and* `SMTP_PASS` are both
+set; that takes priority over `RESEND_API_KEY`, which is only a fallback for
+hosts that block outbound SMTP ports. On this server SMTP works, so set:
+
+```env
+SMTP_HOST=smtp.zoho.com     # smtp.zoho.eu for EU accounts
+SMTP_PORT=465               # try 587 with SMTP_SECURE=false if 465 times out
+SMTP_USER=you@yourdomain.com
+SMTP_PASS=<Zoho app-specific password>
+```
+
+`SMTP_PASS` must be an **app-specific password** if the Zoho account has 2FA
+(Zoho → My Account → Security → App Passwords), not the normal login password.
+
+Then recreate the container so it picks up the new values:
+
+```bash
+docker compose up -d --force-recreate app
+```
+
+If `mail-check` passes but the app still fails, the running container has an
+older environment than the test — the `--force-recreate` above is the fix.
+A `Resend error 401` in the app logs means it fell back to Resend with an
+invalid key, i.e. SMTP was not configured; set the two SMTP vars above.
 
 **Back up the database:**
 

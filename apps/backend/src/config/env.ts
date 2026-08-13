@@ -29,7 +29,8 @@ const schema = z.object({
   // Sending uses SMTP, NOT IMAP (IMAP only reads mailboxes). For Zoho:
   //   SMTP_HOST=smtp.zoho.com  SMTP_PORT=465  SMTP_USER=you@yourdomain
   //   SMTP_PASS=<app-specific password>   (generate one in Zoho if 2FA is on)
-  // Media email is disabled until SMTP_USER + SMTP_PASS are both set.
+  // SMTP is the primary transport: when SMTP_USER + SMTP_PASS are both set it is
+  // used and RESEND_API_KEY is ignored. Zoho EU accounts use smtp.zoho.eu.
   SMTP_HOST: z.string().default('smtp.zoho.com'),
   SMTP_PORT: z.coerce.number().int().positive().default(465),
   // Leave unset to auto-pick: true for port 465, false otherwise (e.g. 587/STARTTLS).
@@ -48,7 +49,8 @@ const schema = z.object({
   // Groq API key for Whisper audio transcription. Leave unset to disable.
   GROQ_API_KEY: z.string().optional(),
 
-  // Resend API key for transactional email (replaces SMTP which Railway blocks).
+  // Fallback transport for hosts that block outbound SMTP ports (Railway did).
+  // Only used when SMTP_USER/SMTP_PASS are absent — SMTP wins when both are set.
   RESEND_API_KEY: z.string().optional(),
 
   MEDIA_STORAGE_PATH: z.string().default('./storage'),
