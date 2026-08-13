@@ -130,7 +130,8 @@ export function ChatList({
               placeholder="+972501234567"
               inputMode="tel"
               dir="ltr"
-              className="rounded-full border border-gray-300 px-3.5 py-1.5 text-sm
+              className="rounded-full border border-gray-300 bg-white px-3.5 py-1.5 text-sm
+                         text-ink placeholder:text-ink-muted
                          focus:border-brand-primary focus:outline-none"
             />
             {/* The country code is optional, not absent — spell that out, or a
@@ -143,7 +144,8 @@ export function ChatList({
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               placeholder="Name (optional)"
-              className="rounded-full border border-gray-300 px-3.5 py-1.5 text-sm
+              className="rounded-full border border-gray-300 bg-white px-3.5 py-1.5 text-sm
+                         text-ink placeholder:text-ink-muted
                          focus:border-brand-primary focus:outline-none"
             />
             {newError && <div className="px-1 text-xs text-red-600">{newError}</div>}
