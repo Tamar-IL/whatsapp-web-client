@@ -26,6 +26,8 @@ export interface ChatMessage {
   hasMedia?: boolean;
   sentAt: string;
   replyTo?: { id: string; body: string | null; direction: string; type: string } | null;
+  /** Quick-reply button labels shown under this message, as ["Yes", "No"]. */
+  buttons?: string[] | null;
   /** Set on a reaction row: the id of the message it reacts to. */
   reactsToId?: string | null;
   /** Reactions others placed ON this message, newest per side. */
@@ -225,6 +227,7 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         mediaMime: (p.mediaMime as string) ?? null,
         mediaName: (p.mediaName as string) ?? null,
         replyTo: (p.replyTo as ChatMessage['replyTo']) ?? null,
+        buttons: Array.isArray(p.buttons) ? (p.buttons as string[]) : null,
         // Carried through so a live reaction lands on its target bubble; without
         // it the row would sit in the thread as an unattached emoji.
         reactsToId: (p.reactsToId as string) ?? null,
@@ -527,6 +530,7 @@ function Bubble({
           <span title={new Date(message.sentAt).toLocaleString('he-IL')}>{time}</span>
           {outbound && <StatusTick status={message.status} />}
         </div>
+        {message.buttons && message.buttons.length > 0 && <QuickReplyChips labels={message.buttons} />}
         {/* Reaction chip, WhatsApp-style: overlapping the bubble's bottom corner. */}
         {reactions && reactions.length > 0 && (
           <div
@@ -547,6 +551,33 @@ function Bubble({
       </div>
       {/* Reply action (right of inbound bubbles) */}
       {!outbound && <ReplyButton onClick={() => onReply(message)} />}
+    </div>
+  );
+}
+
+/**
+ * Quick-reply chips under a bubble.
+ *
+ * A read-only echo of what the customer's WhatsApp renders — they tap on their
+ * phone, not here, and the tap comes back as an ordinary inbound message whose
+ * body is the button's label. Rendered as disabled buttons rather than plain
+ * text so it stays obvious this is the message's shape, not a control for us.
+ */
+function QuickReplyChips({ labels }: { labels: string[] }) {
+  return (
+    <div className="-mx-2.5 -mb-1.5 mt-1.5 border-t border-black/10">
+      {labels.map((label, i) => (
+        <div
+          key={`${label}-${i}`}
+          className={
+            'px-2.5 py-1.5 text-center text-sm font-medium text-brand-link ' +
+            (i > 0 ? 'border-t border-black/10' : '')
+          }
+          title="Your customer taps this in WhatsApp; the reply arrives as a normal message"
+        >
+          {label}
+        </div>
+      ))}
     </div>
   );
 }

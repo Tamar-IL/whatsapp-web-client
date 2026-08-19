@@ -68,6 +68,11 @@ const schema = z.object({
   // operator picks (not what WhatsApp receives). Kept generous for phone clips.
   MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(200 * 1024 * 1024),
 
+  // Language tag stamped on the quick-reply Content templates this app creates.
+  // Purely metadata while the templates stay unapproved (in-session sends), but
+  // it is the language Meta would review them under if they were ever submitted.
+  QUICK_REPLY_LANGUAGE: z.string().min(2).default('he'),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   TRUST_PROXY: z.string().default('1'),
 });

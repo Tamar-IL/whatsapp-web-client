@@ -11,6 +11,13 @@ import { deliverText, DeliverError } from '../lib/deliverText';
 import { twilioClient } from '../twilio/client';
 import { saveMedia, signMediaToken, mimeToType } from '../lib/mediaStore';
 import { compressVideoToFit, SAFE_VIDEO_BYTES, VideoTooLargeError } from '../lib/videoTranscode';
+import {
+  sendQuickReply,
+  QuickReplyError,
+  MAX_BUTTONS,
+  MAX_BODY_CHARS,
+  MAX_BUTTON_CHARS,
+} from '../twilio/quickReply';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
 
@@ -243,6 +250,125 @@ messagesRouter.post(
         mediaMime: message.mediaMime,
         mediaName: message.mediaName,
         hasMedia: true,
+        sentAt: message.sentAt,
+      },
+    });
+  }),
+);
+
+const sendButtonsSchema = z.object({
+  conversationId: z.string().min(1),
+  body: z.string().min(1).max(MAX_BODY_CHARS),
+  buttons: z
+    .array(z.string().trim().min(1).max(MAX_BUTTON_CHARS))
+    .min(1)
+    .max(MAX_BUTTONS),
+  clientId: z.string().min(1).max(64),
+});
+
+/**
+ * POST /api/messages/buttons — send a text with up to 3 quick-reply buttons.
+ *
+ * The 24h window check is not just the usual free-form rule here: an unapproved
+ * quick-reply template is ONLY sendable in-session. Outside the window this
+ * would need Meta approval, so the same WINDOW_CLOSED response is the correct
+ * and complete answer — the operator's route out is a template, as always.
+ *
+ * Unlike the text path this takes no replyToId. A quoted reply is flattened into
+ * the body (see deliverText), which would make every send a unique body and so a
+ * brand-new Twilio Content resource — the exact leak getOrCreateContentSid
+ * exists to prevent.
+ */
+messagesRouter.post(
+  '/buttons',
+  asyncHandler(async (req, res) => {
+    const parsed = sendButtonsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(
+        400,
+        'BAD_INPUT',
+        `A message and 1–${MAX_BUTTONS} buttons are required (max ${MAX_BUTTON_CHARS} characters each).`,
+      );
+    }
+    const { conversationId, body, buttons, clientId } = parsed.data;
+
+    // WhatsApp rejects a template whose buttons are not all distinct, and two
+    // identical chips would be unanswerable anyway — the reply text is the label.
+    const seen = new Set(buttons.map((b) => b.toLowerCase()));
+    if (seen.size !== buttons.length) {
+      throw new ApiError(400, 'DUPLICATE_BUTTONS', 'Each button needs different text.');
+    }
+
+    const conv = await prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: { contact: true },
+    });
+    if (!conv) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found.');
+
+    if (!windowState(conv.lastInboundAt).open) {
+      throw new ApiError(409, 'WINDOW_CLOSED', new WindowClosedError().message);
+    }
+
+    let sid: string;
+    try {
+      const sent = await sendQuickReply({
+        toPhone: conv.contact.phoneNumber,
+        body,
+        buttons,
+        statusCallbackUrl: `${env.PUBLIC_BASE_URL}/webhooks/twilio/status`,
+      });
+      sid = sent.sid;
+    } catch (err) {
+      if (err instanceof QuickReplyError) {
+        const friendly = twilioErrorMessage(err.twilioCode);
+        throw new ApiError(502, 'TWILIO_SEND_FAILED', `${friendly} [${err.message}]`);
+      }
+      throw err;
+    }
+
+    const now = new Date();
+    const message = await withOutbox(async (tx, emit) => {
+      const m = await tx.message.create({
+        data: {
+          conversationId: conv.id,
+          twilioSid: sid,
+          clientId,
+          direction: 'outbound',
+          type: 'text',
+          status: 'sent',
+          body,
+          buttons,
+          sentAt: now,
+        },
+      });
+      await tx.conversation.update({ where: { id: conv.id }, data: { lastMessageAt: now } });
+      await emit({
+        kind: 'message.added',
+        conversationId: conv.id,
+        payload: {
+          messageId: m.id,
+          clientId: m.clientId,
+          direction: 'outbound',
+          type: m.type,
+          status: m.status,
+          body: m.body,
+          buttons,
+          sentAt: m.sentAt,
+        },
+      });
+      return m;
+    });
+
+    res.json({
+      message: {
+        id: message.id,
+        clientId: message.clientId,
+        twilioSid: message.twilioSid,
+        direction: 'outbound',
+        type: message.type,
+        status: message.status,
+        body: message.body,
+        buttons,
         sentAt: message.sentAt,
       },
     });

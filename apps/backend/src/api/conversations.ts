@@ -299,6 +299,9 @@ conversationsRouter.get(
           hasMedia: Boolean(m.mediaUrl),
           errorCode: m.errorCode,
           errorMessage: m.errorMessage,
+          // Quick-reply chips. Twilio echoes back only the Content SID, so the
+          // labels the customer saw are replayed from our own row.
+          buttons: Array.isArray(m.buttons) ? (m.buttons as string[]) : null,
           sentAt: m.sentAt,
           replyTo: quoted
             ? { id: quoted.id, body: quoted.body, direction: quoted.direction, type: quoted.type }

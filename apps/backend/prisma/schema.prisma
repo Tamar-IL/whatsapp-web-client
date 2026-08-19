@@ -126,6 +126,11 @@ model Message {
   // (from the inbound webhook's OriginalRepliedMessageSid).
   replyToTwilioSid String?
 
+  // Quick-reply button labels sent with this message, as ["Yes", "No"].
+  // Stored so our own thread can redraw the buttons the customer saw — Twilio
+  // only echoes back the Content SID, not the rendered actions.
+  buttons Json?
+
   conversation Conversation @relation(fields: [conversationId], references: [id])
   reactsTo     Message?     @relation("ReactsTo", fields: [reactsToId], references: [id])
   reactions    Message[]    @relation("ReactsTo")
@@ -133,6 +138,26 @@ model Message {
   @@index([conversationId, sentAt(sort: Desc)])
   @@index([conversationId, createdAt])
   @@map("messages")
+}
+
+// ===== Quick-reply button sets =====
+// Sending WhatsApp buttons requires a Twilio Content resource; there is no way
+// to pass actions inline on messages.create. Creating one per send would leak a
+// new Content resource into the account on every button message, so each
+// distinct (body + buttons) pair is created once and reused, keyed by hash.
+//
+// These are deliberately NOT submitted to Meta for approval: an unapproved
+// quick-reply template is sendable inside the 24-hour session window, which is
+// the only window this app sends buttons in.
+model QuickReplyTemplate {
+  id         String   @id @default(cuid())
+  hash       String   @unique // sha256 of body + button titles
+  contentSid String   @unique // Twilio Content SID (HX...)
+  body       String
+  buttons    Json // string[] of button titles
+  createdAt  DateTime @default(now())
+
+  @@map("quick_reply_templates")
 }
 
 // ===== Scheduled messages =====
