@@ -1,17 +1,28 @@
-# שלב 1: בניית האפליקציה (קומפילציה מ-TS ל-JS)
-FROM node:18-alpine AS builder
+# Build and run the whole app (backend API + built frontend) in one image.
+# Mirrors the steps in nixpacks.toml.
+FROM node:20-bookworm-slim
+
+# ffmpeg: voice message conversion. openssl: required by Prisma.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ffmpeg openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
+
+# Install dependencies for all workspaces (the workspace package.json files must be
+# copied before installing, otherwise backend/frontend deps such as tsc are missing).
+COPY package.json package-lock.json ./
+COPY apps/backend/package.json apps/backend/
+COPY apps/frontend/package.json apps/frontend/
+RUN npm ci --include=dev
+
 COPY . .
-RUN npm run build
+RUN npm --workspace apps/backend run prisma:generate \
+  && npm --workspace apps/backend run build \
+  && npm --workspace apps/frontend run build
 
-# שלב 2: הרצת האפליקציה בלבד (כדי שהאימג' יהיה קל ומהיר)
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install --omit=dev
-COPY --from=builder /app/dist ./dist
-
+ENV NODE_ENV=production
+ENV PORT=8080
 EXPOSE 8080
-CMD ["node", "dist/index.js"]
+# Applies pending DB migrations, then starts the server (serves the frontend too).
+CMD ["npm", "--workspace", "apps/backend", "run", "start:prod"]
