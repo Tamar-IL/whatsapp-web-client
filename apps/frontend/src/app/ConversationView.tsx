@@ -11,6 +11,7 @@ import { InputBar } from './InputBar';
 import { ScheduledBar } from './ScheduledBar';
 import { AudioPlayer } from './AudioPlayer';
 import { EmailMediaButton } from './EmailMediaButton';
+import { RichText } from '../lib/richText';
 
 export interface ChatMessage {
   id: string;
@@ -523,7 +524,9 @@ function Bubble({
         {message.hasMedia && message.mediaUrl && (
           <MediaContent message={message} onOpenImage={onOpenImage} />
         )}
-        {message.body && <div className="whitespace-pre-wrap break-words">{message.body}</div>}
+        {message.body && <div className="whitespace-pre-wrap break-words">
+            <RichText text={message.body} />
+          </div>}
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-ink-muted">
           {/* Hover shows the full date — the bubble itself only has room for the
               time, and the day separator above may have scrolled out of view. */}
