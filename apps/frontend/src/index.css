@@ -26,6 +26,11 @@ body {
   font-family: "Segoe UI", Helvetica, Arial, system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Without this, text colour fell through to the browser default. Tailwind's
+     preflight sets `color: inherit` on inputs, so any field that didn't name a
+     colour of its own rendered in whatever the browser chose — which on a light
+     background could be almost invisible. */
+  color: var(--c-text);
 }
 
 /* WhatsApp-style conversation wallpaper: warm beige + a faint doodle texture.

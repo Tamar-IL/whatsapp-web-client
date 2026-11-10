@@ -4,11 +4,51 @@
  * Text: Enter sends, Shift+Enter newline; textarea auto-grows.
  * Files: the paperclip STAGES a file (with a preview); it's only sent when you
  * press Send/Enter (optionally with the text as a caption). A × removes the stage.
+ * Buttons: the 🔘 button attaches up to 3 quick-reply chips to the typed text.
  * 24h window closed → server returns 409 WINDOW_CLOSED → show template notice.
  */
-import { type ChangeEvent, type FormEvent, type KeyboardEvent, useRef, useState } from 'react';
+import {
+  type ChangeEvent,
+  type FormEvent,
+  type KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { api, apiUpload, ApiError } from '../api/client';
+import { TemplateModal } from './TemplateModal';
 import type { ChatMessage } from './ConversationView';
+
+/**
+ * Emoji offered by the picker, in the order they appear.
+ *
+ * A hand-picked common set rather than a full Unicode browser: this is for
+ * dropping a 👍 or a ❤️ into a reply, not for hunting an obscure glyph. Grouped
+ * loosely — faces, hands, hearts, then everyday symbols — so the eye can land on
+ * the right region quickly.
+ */
+const EMOJI = [
+  '😀', '😂', '🤣', '🙂', '😉', '😊', '😍', '🥰',
+  '😘', '😎', '🤔', '🤗', '😅', '😢', '😭', '😡',
+  '🥳', '😴', '🤦', '🤷', '😱', '🤩', '😇', '🙃',
+  '👍', '👎', '👌', '🙏', '👏', '💪', '🤝', '✌️',
+  '👋', '☝️', '🤞', '🫶', '❤️', '🧡', '💛', '💚',
+  '💙', '💜', '🖤', '💔', '💕', '✨', '🔥', '⭐',
+  '🎉', '🎁', '✅', '❌', '❗', '❓', '💯', '👀',
+  '☀️', '🌙', '📞', '📩', '⏰', '🚗', '🏠', '🍀',
+];
+
+/**
+ * Quick-reply limits, mirroring the server (twilio/quickReply.ts).
+ *
+ * Three is not an arbitrary UI choice: it is WhatsApp's cap for a quick-reply
+ * sent WITHOUT Meta approval, which is the only kind this app sends. Going to
+ * four would drag every button message into the approval queue.
+ */
+const MAX_BUTTONS = 3;
+const MAX_BUTTON_CHARS = 20;
+/** Twilio's cap on a quick-reply body — lower than the 4096 a plain text allows. */
+const MAX_BUTTON_BODY_CHARS = 1024;
 
 function newClientId(): string {
   return 'c_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -64,8 +104,55 @@ export function InputBar({
   const [showSchedule, setShowSchedule] = useState(false);
   const [scheduling, setScheduling] = useState(false);
   const [customWhen, setCustomWhen] = useState('');
+  const [showEmoji, setShowEmoji] = useState(false);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [showButtons, setShowButtons] = useState(false);
+  const [buttonLabels, setButtonLabels] = useState<string[]>(['']);
+  const [sendingButtons, setSendingButtons] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  // Close the emoji picker on Escape or a click outside it. Clicks inside any
+  // emoji UI are ignored so the toggle button still works — otherwise mousedown
+  // would close it and the click right after would reopen it.
+  useEffect(() => {
+    if (!showEmoji) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') setShowEmoji(false);
+    };
+    const onDown = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest?.('[data-emoji-ui]')) setShowEmoji(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [showEmoji]);
+
+  /**
+   * Insert an emoji at the caret (replacing any selection), rather than
+   * appending. Someone who clicks into the middle of a sentence to add a 🙂
+   * means it to land there.
+   */
+  function insertEmoji(emoji: string) {
+    const ta = taRef.current;
+    if (!ta) {
+      onChangeText(text + emoji);
+      return;
+    }
+    const start = ta.selectionStart ?? text.length;
+    const end = ta.selectionEnd ?? start;
+    onChangeText(text.slice(0, start) + emoji + text.slice(end));
+    // Wait a frame: React has to write the new value before the caret can be
+    // placed after the emoji, otherwise it snaps back to the old position.
+    requestAnimationFrame(() => {
+      ta.focus();
+      const pos = start + emoji.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }
 
   function autoGrow() {
     const ta = taRef.current;
@@ -221,6 +308,80 @@ export function InputBar({
     }
   }
 
+  /**
+   * Send the typed text with quick-reply chips attached.
+   *
+   * Blank rows are dropped rather than rejected — an empty third slot is just an
+   * unused slot, and erroring on it would punish the operator for the UI showing
+   * one more input than they needed.
+   */
+  async function sendButtons() {
+    const body = text.trim();
+    const labels = buttonLabels.map((l) => l.trim()).filter(Boolean);
+    if (sendingButtons) return;
+    if (!body) {
+      setError('Type the message first, then add its buttons.');
+      return;
+    }
+    if (!labels.length) {
+      setError('Add at least one button, or send it as a normal message.');
+      return;
+    }
+    // A button message is capped well below a plain one, so say which limit was
+    // hit — the server would otherwise reject this as a malformed payload.
+    if (body.length > MAX_BUTTON_BODY_CHARS) {
+      setError(
+        `A message with buttons can be up to ${MAX_BUTTON_BODY_CHARS} characters (this one is ${body.length}). ` +
+          'Shorten it, or send it without buttons.',
+      );
+      return;
+    }
+    // Checked here as well as on the server so the operator finds out before the
+    // round trip — WhatsApp rejects the whole template over a duplicate label.
+    if (new Set(labels.map((l) => l.toLowerCase())).size !== labels.length) {
+      setError('Each button needs different text.');
+      return;
+    }
+
+    setSendingButtons(true);
+    setError(null);
+    try {
+      const { message } = await api<{ message: ChatMessage }>('/api/messages/buttons', {
+        method: 'POST',
+        body: { conversationId, body, buttons: labels, clientId: newClientId() },
+      });
+      onSent(message);
+      setText('');
+      resetHeight();
+      setButtonLabels(['']);
+      setShowButtons(false);
+      onCancelReply();
+    } catch (err) {
+      handleApiError(err, 'Could not send the buttons. Please try again.');
+    } finally {
+      setSendingButtons(false);
+    }
+  }
+
+  function setLabel(i: number, value: string) {
+    setButtonLabels((prev) => prev.map((l, idx) => (idx === i ? value : l)));
+  }
+  function removeLabel(i: number) {
+    // Never drop to zero rows: an empty composer with no input looks broken.
+    setButtonLabels((prev) => (prev.length === 1 ? [''] : prev.filter((_, idx) => idx !== i)));
+  }
+
+  function openButtons() {
+    if (!text.trim()) {
+      setError('Type a message first, then add buttons to it.');
+      return;
+    }
+    setError(null);
+    // Both popovers occupy the same slot above the input bar, so they take turns.
+    setShowSchedule(false);
+    setShowButtons((v) => !v);
+  }
+
   function openScheduler() {
     if (!text.trim()) {
       setError('Type a message first, then schedule it.');
@@ -228,6 +389,7 @@ export function InputBar({
     }
     setError(null);
     setCustomWhen(toLocalInput(nextTimeAt(8, 0)));
+    setShowButtons(false);
     setShowSchedule((s) => !s);
   }
 
@@ -241,8 +403,24 @@ export function InputBar({
   if (!windowOpen) {
     return (
       <div className="border-t border-black/10 bg-[#f0f2f5] px-4 py-3 text-center text-sm text-ink-muted">
-        The 24-hour window is closed. You can only reply with an approved template message.
-        <span className="ml-1 italic">(Template sending — Phase 6.)</span>
+        <div>
+          The 24-hour window is closed. You can only reply with an approved template message.
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowTemplates(true)}
+          className="mt-2 rounded-full bg-brand-primary px-5 py-2 text-sm font-medium text-white
+                     transition hover:opacity-90"
+        >
+          Send template
+        </button>
+        {showTemplates && (
+          <TemplateModal
+            conversationId={conversationId}
+            onClose={() => setShowTemplates(false)}
+            onSent={onSent}
+          />
+        )}
       </div>
     );
   }
@@ -304,6 +482,121 @@ export function InputBar({
                 {scheduling ? '…' : 'Schedule'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quick-reply composer. The message body is whatever is in the textarea;
+          this only collects the chip labels that ride along with it. */}
+      {showButtons && (
+        <div className="absolute bottom-full left-4 right-4 z-20 mb-2 flex justify-center">
+          <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-white p-3 shadow-lg">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-sm font-semibold text-ink">Quick-reply buttons</span>
+              <button
+                type="button"
+                onClick={() => setShowButtons(false)}
+                className="rounded-full px-2 text-lg leading-none text-ink-muted hover:text-red-600"
+                title="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="mb-2 rounded-lg bg-black/5 px-2.5 py-2">
+              <div className="mb-0.5 text-[11px] font-medium text-ink-muted">Message</div>
+              <div className="line-clamp-3 whitespace-pre-wrap break-words text-sm text-ink">
+                {text.trim() || '—'}
+              </div>
+            </div>
+
+            <div className="mb-2 space-y-1.5">
+              {buttonLabels.map((label, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    value={label}
+                    onChange={(e) => setLabel(i, e.target.value.slice(0, MAX_BUTTON_CHARS))}
+                    placeholder={`Button ${i + 1}`}
+                    maxLength={MAX_BUTTON_CHARS}
+                    className="flex-1 rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-sm
+                               text-ink placeholder:text-ink-muted focus:border-brand-primary focus:outline-none"
+                  />
+                  <span className="w-8 shrink-0 text-right text-[11px] tabular-nums text-ink-muted">
+                    {label.length}/{MAX_BUTTON_CHARS}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeLabel(i)}
+                    className="shrink-0 rounded-full px-1.5 text-lg leading-none text-ink-muted hover:text-red-600"
+                    title="Remove this button"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {buttonLabels.length < MAX_BUTTONS && (
+              <button
+                type="button"
+                onClick={() => setButtonLabels((prev) => [...prev, ''])}
+                className="mb-2 text-xs font-medium text-brand-link hover:text-brand-primary"
+              >
+                + Add button
+              </button>
+            )}
+
+            {/* The 3-button ceiling is the approval boundary, so it is stated
+                rather than left as an unexplained disabled "Add button". */}
+            <p className="mb-2 text-[11px] leading-snug text-ink-muted">
+              Up to {MAX_BUTTONS} buttons. Sends right away with no Meta approval, because the
+              24-hour window is open. Tapping one sends its text back to you as a normal reply.
+            </p>
+
+            <button
+              type="button"
+              disabled={sendingButtons || !text.trim() || !buttonLabels.some((l) => l.trim())}
+              onClick={() => void sendButtons()}
+              className="w-full rounded-lg bg-brand-primary px-3 py-2 text-sm font-medium text-white
+                         transition hover:opacity-90 disabled:opacity-50"
+            >
+              {sendingButtons ? 'Sending…' : 'Send with buttons'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Emoji picker. Inserts into the text — the message then sends as any
+          other text message, with no special handling. */}
+      {showEmoji && (
+        <div
+          data-emoji-ui
+          className="absolute bottom-full left-4 z-20 mb-2 w-[19rem] rounded-2xl border
+                     border-gray-200 bg-white p-2.5 shadow-lg"
+        >
+          <div className="mb-1.5 flex items-center justify-between px-1">
+            <span className="text-xs font-semibold text-ink">אימוג'י</span>
+            <button
+              type="button"
+              onClick={() => setShowEmoji(false)}
+              className="rounded-full px-2 text-lg leading-none text-ink-muted hover:text-red-600"
+              title="Close"
+            >
+              ×
+            </button>
+          </div>
+          <div className="scroll-thin grid max-h-52 grid-cols-8 gap-0.5 overflow-y-auto">
+            {EMOJI.map((e) => (
+              <button
+                key={e}
+                type="button"
+                onClick={() => insertEmoji(e)}
+                title={e}
+                className="rounded-lg p-1.5 text-xl leading-none transition hover:bg-black/5"
+              >
+                {e}
+              </button>
+            ))}
           </div>
         </div>
       )}
@@ -415,6 +708,59 @@ export function InputBar({
               </svg>
             </button>
           )}
+          {/* Quick-reply buttons — text only, like scheduling: WhatsApp has no
+              way to attach buttons to a media message. */}
+          {!staged && (
+            <button
+              type="button"
+              title="Add quick-reply buttons"
+              aria-label="Add quick-reply buttons"
+              aria-expanded={showButtons}
+              onClick={openButtons}
+              disabled={sending || sendingButtons}
+              className={
+                'shrink-0 leading-none transition disabled:opacity-50 ' +
+                (showButtons ? 'text-brand-primary' : 'text-ink-muted hover:text-brand-primary')
+              }
+            >
+              <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+                <path d="M4 5h16a2 2 0 012 2v3a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2zm0 2v3h16V7H4zm0 7h16a2 2 0 012 2v3a2 2 0 01-2 2H4a2 2 0 01-2-2v-3a2 2 0 012-2zm0 2v3h16v-3H4z" />
+              </svg>
+            </button>
+          )}
+          {/* Emoji — next to the clock. Stays available with a file staged, so
+              a caption can carry one too. */}
+          <button
+            type="button"
+            data-emoji-ui
+            title="Emoji"
+            aria-label="Insert emoji"
+            aria-expanded={showEmoji}
+            onClick={() => setShowEmoji((s) => !s)}
+            disabled={sending}
+            className={
+              'shrink-0 leading-none transition disabled:opacity-50 ' +
+              (showEmoji ? 'text-brand-primary' : 'text-ink-muted hover:text-brand-primary')
+            }
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+              <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 18a8 8 0 110-16 8 8 0 010 16zM8.5 11a1.5 1.5 0 100-3 1.5 1.5 0 000 3zm7 0a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM12 17.5c2.33 0 4.31-1.46 5-3.5H7c.69 2.04 2.67 3.5 5 3.5z" />
+            </svg>
+          </button>
+          {/* Templates — also reachable while the window is open, so a stock
+              greeting doesn't have to be retyped just because the chat is live. */}
+          <button
+            type="button"
+            title="Send a template"
+            aria-label="Send a template"
+            onClick={() => setShowTemplates(true)}
+            disabled={sending}
+            className="shrink-0 leading-none text-ink-muted transition hover:text-brand-primary disabled:opacity-50"
+          >
+            <svg viewBox="0 0 24 24" className="h-5 w-5 fill-current">
+              <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 7V3.5L18.5 9H13zM8 13h8v1.5H8V13zm0 3.5h8V18H8v-1.5z" />
+            </svg>
+          </button>
           <textarea
             ref={taRef}
             value={text}
@@ -426,6 +772,14 @@ export function InputBar({
           />
         </div>
       </div>
+
+      {showTemplates && (
+        <TemplateModal
+          conversationId={conversationId}
+          onClose={() => setShowTemplates(false)}
+          onSent={onSent}
+        />
+      )}
     </form>
   );
 }
