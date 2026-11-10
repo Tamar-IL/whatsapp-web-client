@@ -5,7 +5,7 @@ import { prisma } from '../db/prisma';
 import { env } from '../config/env';
 import { ApiError } from '../lib/errors';
 import { logger } from '../config/logger';
-import { mediaExists, readMedia } from '../lib/mediaStore';
+import { MEDIA_SANDBOX_CSP, isInlineSafeMime, mediaExists, readMedia, safeFilename } from '../lib/mediaStore';
 import { sendMail } from '../lib/mailer';
 
 export const mediaRouter = Router();
@@ -90,8 +90,15 @@ mediaRouter.get(
     const { buf, contentType } = await loadMediaBytes(id, msg.mediaUrl, msg.mediaMime);
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'private, max-age=3600');
-    if (req.query.download) {
-      res.setHeader('Content-Disposition', `attachment; filename="${filenameFor(msg, id, contentType)}"`);
+    // The file may come from a customer: never let it run as a page on our origin.
+    res.setHeader('Content-Security-Policy', MEDIA_SANDBOX_CSP);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (req.query.download || !isInlineSafeMime(contentType)) {
+      const name = filenameFor(msg, id, contentType);
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${safeFilename(name)}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      );
     }
     res.send(buf);
   }),
@@ -110,7 +117,7 @@ const SUBJECT_NOTE_MAX = 60;
  *
  * The SERVER fetches the bytes and sends them via SMTP, so the file never goes
  * through the operator's NetFree-filtered browser (which turns a direct download
- * into a block page). Delivers to MEDIA_EMAIL_TO.
+ * into a block page). Delivers to MEDIA_EMAIL_TO (falling back to ADMIN_EMAIL).
  *
  * Body: `{ note? }` — a free-text note typed when clicking "email to me". It
  * goes in the subject (truncated) and at the TOP of the body, because the whole
@@ -174,8 +181,13 @@ mediaRouter.post(
       'The file is attached to this email.',
     ].join('\n');
 
+    const to = env.MEDIA_EMAIL_TO ?? env.ADMIN_EMAIL;
+    if (!to) {
+      throw new ApiError(503, 'MAIL_NOT_CONFIGURED', 'Set MEDIA_EMAIL_TO (or ADMIN_EMAIL) on the server.');
+    }
+
     try {
-      await sendMail({ to: env.MEDIA_EMAIL_TO, subject, text, attachments: [{ filename, content: buf, contentType }] });
+      await sendMail({ to, subject, text, attachments: [{ filename, content: buf, contentType }] });
     } catch (err) {
       // Re-surface configuration/known errors verbatim; wrap unexpected SMTP
       // failures with their real reason so the UI shows it instead of a generic
@@ -185,6 +197,6 @@ mediaRouter.post(
       logger.error({ err, id }, 'media email send failed');
       throw new ApiError(502, 'EMAIL_SEND_FAILED', `Could not send the email: ${reason}`);
     }
-    res.json({ ok: true, to: env.MEDIA_EMAIL_TO });
+    res.json({ ok: true, to });
   }),
 );

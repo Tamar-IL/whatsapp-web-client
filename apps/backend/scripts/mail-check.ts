@@ -21,7 +21,7 @@ async function checkSmtp(user: string, pass: string) {
   const port = Number(process.env.SMTP_PORT ?? 465);
   const secure = process.env.SMTP_SECURE ? process.env.SMTP_SECURE === 'true' : port === 465;
   const from = process.env.MAIL_FROM || user;
-  const to = process.env.MEDIA_EMAIL_TO ?? 'swenlly123@gmail.com';
+  const to = recipient();
 
   console.log('Transport:      SMTP (SMTP_USER + SMTP_PASS are set)');
   console.log(`  host/port:    ${host}:${port}  (secure=${secure})`);
@@ -89,7 +89,7 @@ async function checkSmtp(user: string, pass: string) {
 
 async function checkResend(key: string) {
   const from = process.env.MAIL_FROM ?? 'WhatsApp <onboarding@resend.dev>';
-  const to = process.env.MEDIA_EMAIL_TO ?? 'swenlly123@gmail.com';
+  const to = recipient();
 
   console.log('Transport:      Resend (SMTP is not configured)');
   console.log(`  key length:   ${key.length}${key.length === 36 ? '' : '   (a Resend key is normally 36)'}`);
@@ -161,3 +161,13 @@ main().catch((err) => {
   console.error(err);
   process.exit(1);
 });
+
+/** Same rule as the server: MEDIA_EMAIL_TO, falling back to ADMIN_EMAIL. */
+function recipient(): string {
+  const to = process.env.MEDIA_EMAIL_TO || process.env.ADMIN_EMAIL;
+  if (!to) {
+    console.error('Set MEDIA_EMAIL_TO (or ADMIN_EMAIL) in the environment first.');
+    process.exit(1);
+  }
+  return to;
+}

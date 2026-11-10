@@ -8,6 +8,15 @@ export const LOGIN_CODE_MAX_ATTEMPTS = 5;
 /** Minimum gap between two codes for the same user (stops inbox flooding). */
 export const LOGIN_CODE_RESEND_COOLDOWN_MS = 60_000;
 
+/**
+ * Hard caps on how many codes may be issued for the account, whoever asks and
+ * from whatever IP. The per-IP rate limiters alone don't bound guessing: an
+ * attacker rotating addresses could otherwise get 5 fresh guesses every minute.
+ * With these caps the worst case is 10 codes x 5 guesses = 50 guesses a day.
+ */
+export const LOGIN_CODE_MAX_PER_HOUR = 3;
+export const LOGIN_CODE_MAX_PER_DAY = 10;
+
 /** Uniformly random 6-digit code, zero-padded. */
 export function generateLoginCode(): string {
   return crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
