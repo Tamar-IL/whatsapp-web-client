@@ -8,6 +8,7 @@ import { attachSocketIO } from './realtime/io';
 import { bootstrapAdminUser } from './auth/bootstrap';
 import { startScheduler } from './jobs/scheduler';
 import { prisma } from './db/prisma';
+import { transcriptionEnabled } from './lib/transcribe';
 
 async function main() {
   await bootstrapAdminUser();
@@ -29,6 +30,12 @@ async function main() {
 
   server.listen(env.PORT, () => {
     logger.info({ port: env.PORT, env: env.NODE_ENV }, 'Backend listening.');
+    logger.info(
+      { enabled: transcriptionEnabled() },
+      transcriptionEnabled()
+        ? 'Voice-note transcription enabled (GROQ_API_KEY set).'
+        : 'Voice-note transcription DISABLED: GROQ_API_KEY is not set in the server environment.',
+    );
   });
 
   // Deliver scheduled messages when their time comes (in-process; the pg-boss

@@ -8,7 +8,7 @@ import { mapTwilioStatus, statusRank, syntheticConversationSid } from './program
 import { env } from '../config/env';
 import { saveMedia } from '../lib/mediaStore';
 import { queueMediaForWebhook } from '../lib/makeWebhook';
-import { transcribeAudio } from '../lib/transcribe';
+import { transcribeAudioDetailed } from '../lib/transcribe';
 import type { MessageType } from '@prisma/client';
 
 /**
@@ -403,7 +403,11 @@ async function persistInboundMedia(
 
     // Transcribe audio and update the message body so it shows in the chat.
     if (meta.type === 'audio') {
-      const transcript = await transcribeAudio(buf, resolvedMime ?? 'audio/ogg');
+      const result = await transcribeAudioDetailed(buf, resolvedMime ?? 'audio/ogg');
+      if (!result.ok) {
+        logger.warn({ messageId, reason: result.reason }, 'inbound audio not transcribed');
+      }
+      const transcript = result.ok ? result.text : null;
       if (transcript) {
         const msg = await prisma.message.findUnique({
           where: { id: messageId },

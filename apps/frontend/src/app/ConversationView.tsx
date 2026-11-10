@@ -11,6 +11,7 @@ import { InputBar } from './InputBar';
 import { ScheduledBar } from './ScheduledBar';
 import { AudioPlayer } from './AudioPlayer';
 import { EmailMediaButton } from './EmailMediaButton';
+import { TranscribeButton } from './TranscribeButton';
 import { RichText } from '../lib/richText';
 
 export interface ChatMessage {
@@ -628,6 +629,7 @@ function MediaContent({
   onOpenImage: (url: string) => void;
 }) {
   const [failed, setFailed] = useState(false);
+  const [transcript, setTranscript] = useState<string | null>(null);
   const url = message.mediaUrl!;
   const mime = message.mediaMime ?? '';
   const t = message.type;
@@ -680,6 +682,17 @@ function MediaContent({
     return (
       <div className="mb-1 w-64">
         <AudioPlayer src={url} messageId={message.id} onError={() => setFailed(true)} />
+        {/* No text yet → offer on-demand transcription. Once it succeeds the
+            server broadcasts message.updated and the body renders below the
+            player; the local copy covers a dropped socket in the meantime. */}
+        {!message.body && !transcript && (
+          <div className="mt-1 text-[11px]">
+            <TranscribeButton messageId={message.id} onDone={setTranscript} />
+          </div>
+        )}
+        {!message.body && transcript && (
+          <div className="mt-1 whitespace-pre-wrap break-words text-sm">{transcript}</div>
+        )}
       </div>
     );
   }

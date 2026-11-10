@@ -7,6 +7,8 @@ import { ApiError } from '../lib/errors';
 import { logger } from '../config/logger';
 import { mediaExists, readMedia } from '../lib/mediaStore';
 import { sendMail } from '../lib/mailer';
+import { transcribeAudioDetailed } from '../lib/transcribe';
+import { withOutbox } from '../realtime/outbox';
 
 export const mediaRouter = Router();
 
@@ -186,5 +188,46 @@ mediaRouter.post(
       throw new ApiError(502, 'EMAIL_SEND_FAILED', `Could not send the email: ${reason}`);
     }
     res.json({ ok: true, to: env.MEDIA_EMAIL_TO });
+  }),
+);
+
+/**
+ * POST /api/media/:id/transcribe — (re)transcribe a voice/audio message now.
+ *
+ * Automatic transcription only runs once, right after an inbound voice note is
+ * downloaded, and only for messages that arrived while GROQ_API_KEY was set.
+ * This endpoint covers everything else: older voice notes, ones whose automatic
+ * attempt failed, and outbound recordings. The transcript is saved as the
+ * message body and pushed to every open client; on failure the real reason
+ * (e.g. "Groq returned 401: Invalid API Key") is returned so the UI can show it.
+ */
+mediaRouter.post(
+  '/:id/transcribe',
+  asyncHandler(async (req, res) => {
+    const id = req.params.id!;
+    const msg = await prisma.message.findUnique({
+      where: { id },
+      select: { mediaUrl: true, mediaMime: true, type: true, conversationId: true },
+    });
+    if (!msg?.mediaUrl) throw new ApiError(404, 'NOT_FOUND', 'No media for this message.');
+    const isAudio = msg.type === 'audio' || (msg.mediaMime ?? '').startsWith('audio/');
+    if (!isAudio) throw new ApiError(400, 'NOT_AUDIO', 'Only audio messages can be transcribed.');
+
+    const { buf, contentType } = await loadMediaBytes(id, msg.mediaUrl, msg.mediaMime);
+    const result = await transcribeAudioDetailed(buf, contentType);
+    if (!result.ok) {
+      logger.warn({ id, reason: result.reason }, 'manual transcription failed');
+      throw new ApiError(502, 'TRANSCRIBE_FAILED', `Transcription failed: ${result.reason}`);
+    }
+
+    await withOutbox(async (tx, emit) => {
+      await tx.message.update({ where: { id }, data: { body: result.text } });
+      await emit({
+        kind: 'message.updated',
+        conversationId: msg.conversationId,
+        payload: { messageId: id, body: result.text },
+      });
+    });
+    res.json({ ok: true, body: result.text });
   }),
 );
