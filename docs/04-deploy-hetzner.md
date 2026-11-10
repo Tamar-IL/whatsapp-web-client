@@ -1,5 +1,8 @@
 # Deploying to a Hetzner server (Docker Compose)
 
+> **This is how the app is deployed.** It runs on a private server, built from
+> the **`main`** branch. (Railway / Vercel are not used.)
+
 This guide stands the whole app up on a single Hetzner Cloud server (or any
 Linux box with Docker) using the `docker-compose.yml` in the repo root. The
 stack is fully self-contained:
@@ -49,7 +52,7 @@ ufw --force enable
 ```bash
 git clone https://github.com/tamar-il/whatsapp-web-client.git
 cd whatsapp-web-client
-git checkout claude/deploy-hetzner-server-m1rumh
+git checkout main
 ```
 
 ## 3. Configure `.env`
@@ -148,12 +151,22 @@ verification uses `PUBLIC_BASE_URL`, so it must match exactly.
 
 ## Day-2 operations
 
-**Update to the latest code:**
+**Update to the latest code** (always from `main`):
 
 ```bash
+git checkout main
 git pull
 docker compose up -d --build
 ```
+
+> Older setups followed the `claude/deploy-hetzner-server-m1rumh` branch. That
+> branch is now merged into `main`; the `git checkout main` above switches an
+> existing server over. Your `.env` and data volumes are not touched.
+
+**Forgot the password?** On the login page click *"Forgot password? Email me a
+code"*. A 6-digit code is sent to `ADMIN_EMAIL` using the email settings below
+(SMTP, or Resend). It is single-use and expires after 10 minutes. If no email
+arrives, run the `mail-check` command below.
 
 **View logs / restart / stop:**
 
