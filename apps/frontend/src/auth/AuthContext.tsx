@@ -10,6 +10,9 @@ interface AuthState {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  /** Emails a sign-in code to the account; resolves to the masked address it went to. */
+  requestLoginCode: () => Promise<string>;
+  loginWithCode: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -44,12 +47,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(user);
   }, []);
 
+  const requestLoginCode = useCallback(async () => {
+    const { sentTo } = await api<{ sentTo: string }>('/api/auth/login-code/request', { method: 'POST', body: {} });
+    return sentTo;
+  }, []);
+
+  const loginWithCode = useCallback(async (code: string) => {
+    const { user } = await api<{ user: User }>('/api/auth/login-code/verify', {
+      method: 'POST',
+      body: { code },
+    });
+    setUser(user);
+  }, []);
+
   const logout = useCallback(async () => {
     await api('/api/auth/logout', { method: 'POST' });
     setUser(null);
   }, []);
 
-  return <Ctx.Provider value={{ user, loading, login, logout, refresh }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, loading, login, requestLoginCode, loginWithCode, logout, refresh }}>{children}</Ctx.Provider>;
 }
 
 export function useAuth(): AuthState {
