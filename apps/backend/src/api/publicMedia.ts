@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { asyncHandler } from '../lib/asyncHandler';
 import { prisma } from '../db/prisma';
 import { ApiError } from '../lib/errors';
-import { mediaExists, readMedia, verifyMediaToken } from '../lib/mediaStore';
+import { MEDIA_SANDBOX_CSP, isInlineSafeMime, mediaExists, readMedia, verifyMediaToken } from '../lib/mediaStore';
 
 /**
  * Public, token-protected media endpoint for OUTBOUND files.
@@ -27,7 +27,11 @@ publicMediaRouter.get(
     if (!(await mediaExists(messageId))) throw new ApiError(404, 'GONE', 'Media no longer available.');
 
     const buf = await readMedia(messageId);
-    res.setHeader('Content-Type', msg.mediaMime || 'application/octet-stream');
+    const contentType = msg.mediaMime || 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Security-Policy', MEDIA_SANDBOX_CSP);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (!isInlineSafeMime(contentType)) res.setHeader('Content-Disposition', 'attachment');
     res.setHeader('Content-Length', String(buf.length));
     res.send(buf);
   }),

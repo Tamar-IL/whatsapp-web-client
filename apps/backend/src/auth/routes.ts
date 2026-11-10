@@ -10,6 +10,8 @@ import { env } from '../config/env';
 import { requireAuth } from './middleware';
 import {
   LOGIN_CODE_MAX_ATTEMPTS,
+  LOGIN_CODE_MAX_PER_DAY,
+  LOGIN_CODE_MAX_PER_HOUR,
   LOGIN_CODE_RESEND_COOLDOWN_MS,
   LOGIN_CODE_TTL_MS,
   generateLoginCode,
@@ -101,7 +103,7 @@ async function findAccountUser() {
   return prisma.user.findFirst({ orderBy: { createdAt: 'asc' } });
 }
 
-/** "swenlly123@gmail.com" -> "sw*****3@gmail.com" — enough to recognise, not to harvest. */
+/** "jane.doe@example.com" -> "ja*****e@example.com" — enough to recognise, not to harvest. */
 function maskEmail(email: string): string {
   const [local = '', domain = ''] = email.split('@');
   if (local.length <= 2) return `${local[0] ?? ''}*@${domain}`;
@@ -129,6 +131,16 @@ authRouter.post(
     if (recent) {
       res.json({ ok: true, sentTo });
       return;
+    }
+
+    // Account-wide caps, independent of the caller's IP (see loginCode.ts).
+    const now = Date.now();
+    const [lastHour, lastDay] = await Promise.all([
+      prisma.loginCode.count({ where: { userId: user.id, createdAt: { gt: new Date(now - 3_600_000) } } }),
+      prisma.loginCode.count({ where: { userId: user.id, createdAt: { gt: new Date(now - 86_400_000) } } }),
+    ]);
+    if (lastHour >= LOGIN_CODE_MAX_PER_HOUR || lastDay >= LOGIN_CODE_MAX_PER_DAY) {
+      throw new ApiError(429, 'RATE_LIMITED', 'Too many codes were requested. Try again later, or sign in with your password.');
     }
 
     const code = generateLoginCode();

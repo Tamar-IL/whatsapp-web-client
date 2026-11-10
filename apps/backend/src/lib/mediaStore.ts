@@ -78,6 +78,25 @@ export function verifyMediaToken(token: string): string | null {
   return messageId;
 }
 
+/**
+ * Types a browser may display inline from our origin. Everything else (HTML,
+ * SVG, XML, PDF, unknown...) is forced to download: a file a customer sent must
+ * never be rendered as a page that runs with the operator's session.
+ */
+export function isInlineSafeMime(mime: string): boolean {
+  const base = (mime.split(';')[0] ?? '').trim().toLowerCase();
+  if (base === 'image/svg+xml') return false;
+  return base.startsWith('image/') || base.startsWith('video/') || base.startsWith('audio/');
+}
+
+/** Response headers that neutralise any active content in a served media file. */
+export const MEDIA_SANDBOX_CSP = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
+
+/** Strip characters that could break out of a quoted Content-Disposition filename. */
+export function safeFilename(name: string): string {
+  return name.replace(/[\r\n"\\\/]/g, '_').replace(/[^\x20-\x7E]/g, '_').slice(0, 150) || 'file';
+}
+
 export function mimeToType(mime: string): 'image' | 'video' | 'audio' | 'document' {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('video/')) return 'video';

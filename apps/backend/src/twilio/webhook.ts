@@ -42,11 +42,19 @@ twilioWebhookRouter.post(
     const messageSid = p.MessageSid || p.SmsSid || p.SmsMessageSid;
     const from = p.From; // "whatsapp:+15551234567"
 
+    // The payload is the audit trail for "did this message reach us at all?" and
+    // shows which fields Twilio sent — but the customer's text itself stays out
+    // of the logs: only its length is recorded.
+    const { Body: _body, ...payloadWithoutBody } = p;
     logger.info(
-      // fullPayload is the audit trail for "did this message reach us at all?".
-      // Note it includes message bodies — drop it if log retention ever becomes
-      // a privacy concern.
-      { messageSid, from, hasBody: Boolean(p.Body), numMedia: p.NumMedia, fullPayload: p },
+      {
+        messageSid,
+        from,
+        hasBody: Boolean(p.Body),
+        bodyLength: p.Body?.length ?? 0,
+        numMedia: p.NumMedia,
+        payload: payloadWithoutBody,
+      },
       'Twilio inbound webhook',
     );
 

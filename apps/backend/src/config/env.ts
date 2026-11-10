@@ -39,8 +39,8 @@ const schema = z.object({
   SMTP_PASS: z.string().optional(),
   // Defaults to SMTP_USER when omitted.
   MAIL_FROM: z.string().optional(),
-  // Where "email me this recording" delivers to.
-  MEDIA_EMAIL_TO: z.string().email().default('swenlly123@gmail.com'),
+  // Where "email me this recording" delivers to. Falls back to ADMIN_EMAIL.
+  MEDIA_EMAIL_TO: z.string().email().optional(),
 
   // Country calling code (digits, no "+") used to expand phone numbers typed in
   // LOCAL form when starting a new chat — "0501234567" becomes "+972501234567".
