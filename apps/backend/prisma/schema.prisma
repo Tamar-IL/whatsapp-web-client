@@ -21,8 +21,27 @@ model User {
   totpSecret   String? // reserved for future 2FA
 
   auditEvents AuditEvent[]
+  loginCodes  LoginCode[]
 
   @@map("users")
+}
+
+// One-time sign-in codes emailed to the user ("forgot password? sign in with a
+// code"). Only an HMAC of the code is stored. A code is single-use, expires
+// after a few minutes, and is locked after too many wrong guesses.
+model LoginCode {
+  id        String    @id @default(cuid())
+  userId    String
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("login_codes")
 }
 
 // connect-pg-simple manages its own table (user_sessions) — no Prisma model needed.
