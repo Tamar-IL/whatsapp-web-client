@@ -29,7 +29,8 @@ const schema = z.object({
   // Sending uses SMTP, NOT IMAP (IMAP only reads mailboxes). For Zoho:
   //   SMTP_HOST=smtp.zoho.com  SMTP_PORT=465  SMTP_USER=you@yourdomain
   //   SMTP_PASS=<app-specific password>   (generate one in Zoho if 2FA is on)
-  // Media email is disabled until SMTP_USER + SMTP_PASS are both set.
+  // SMTP is the primary transport: when SMTP_USER + SMTP_PASS are both set it is
+  // used and RESEND_API_KEY is ignored. Zoho EU accounts use smtp.zoho.eu.
   SMTP_HOST: z.string().default('smtp.zoho.com'),
   SMTP_PORT: z.coerce.number().int().positive().default(465),
   // Leave unset to auto-pick: true for port 465, false otherwise (e.g. 587/STARTTLS).
@@ -41,6 +42,15 @@ const schema = z.object({
   // Where "email me this recording" delivers to.
   MEDIA_EMAIL_TO: z.string().email().default('swenlly123@gmail.com'),
 
+  // Country calling code (digits, no "+") used to expand phone numbers typed in
+  // LOCAL form when starting a new chat — "0501234567" becomes "+972501234567".
+  // The leading 0 is a national prefix and is dropped. Numbers typed with a
+  // leading "+" are used as-is and never touch this.
+  DEFAULT_COUNTRY_CODE: z
+    .string()
+    .regex(/^\d{1,4}$/, 'DEFAULT_COUNTRY_CODE must be digits only, e.g. 972')
+    .default('972'),
+
   // Make.com webhook URL for forwarding inbound media (bypasses NetFree).
   // Leave unset to disable.
   MAKE_WEBHOOK_URL: z.string().url().optional(),
@@ -48,7 +58,8 @@ const schema = z.object({
   // Groq API key for Whisper audio transcription. Leave unset to disable.
   GROQ_API_KEY: z.string().optional(),
 
-  // Resend API key for transactional email (replaces SMTP which Railway blocks).
+  // Fallback transport for hosts that block outbound SMTP ports (Railway did).
+  // Only used when SMTP_USER/SMTP_PASS are absent — SMTP wins when both are set.
   RESEND_API_KEY: z.string().optional(),
 
   MEDIA_STORAGE_PATH: z.string().default('./storage'),
@@ -56,6 +67,11 @@ const schema = z.object({
   // to fit WhatsApp's 16MB cap, so this is the cap on the ORIGINAL file the
   // operator picks (not what WhatsApp receives). Kept generous for phone clips.
   MEDIA_MAX_BYTES: z.coerce.number().int().positive().default(200 * 1024 * 1024),
+
+  // Language tag stamped on the quick-reply Content templates this app creates.
+  // Purely metadata while the templates stay unapproved (in-session sends), but
+  // it is the language Meta would review them under if they were ever submitted.
+  QUICK_REPLY_LANGUAGE: z.string().min(2).default('he'),
 
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   TRUST_PROXY: z.string().default('1'),

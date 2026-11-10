@@ -8,7 +8,7 @@
  *
  * Phase 3 ticket 3.9: child components consume events via `useRealtime()`.
  */
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { io, type Socket } from 'socket.io-client';
 
 type ConnStatus = 'connecting' | 'connected' | 'disconnected';
@@ -24,7 +24,14 @@ const Ctx = createContext<RealtimeState>({ status: 'connecting', socket: null })
 
 export function RealtimeProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<ConnStatus>('connecting');
-  const socketRef = useRef<Socket | null>(null);
+  // Held in state, NOT a ref: a ref assignment triggers no re-render, so
+  // children kept seeing `socket: null` until the first status change — which
+  // only lands after the server has already replayed the events missed while
+  // offline. Those replayed events arrived with no listeners attached and were
+  // lost, while `onAny` below advanced the cursor past them so they were never
+  // sent again. Publishing the socket synchronously lets children subscribe
+  // during the connection handshake, well before any replay arrives.
+  const [socket, setSocket] = useState<Socket | null>(null);
 
   useEffect(() => {
     const socket = io({
@@ -35,7 +42,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
       reconnectionDelay: 500,
       reconnectionDelayMax: 5000,
     });
-    socketRef.current = socket;
+    setSocket(socket);
 
     socket.on('connect', () => {
       const sinceEventId = localStorage.getItem(LAST_EVENT_KEY) ?? '0';
@@ -59,10 +66,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
     return () => {
       socket.removeAllListeners();
       socket.close();
+      setSocket(null);
     };
   }, []);
 
-  return <Ctx.Provider value={{ status, socket: socketRef.current }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ status, socket }}>{children}</Ctx.Provider>;
 }
 
 export function useRealtime(): RealtimeState {

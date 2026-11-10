@@ -4,7 +4,7 @@
  * Header (contact name, phone, 24h window badge), message bubbles (text + media),
  * realtime append, mark-read on open, and the input bar.
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { useRealtime } from './RealtimeProvider';
 import { InputBar } from './InputBar';
@@ -27,6 +27,114 @@ export interface ChatMessage {
   hasMedia?: boolean;
   sentAt: string;
   replyTo?: { id: string; body: string | null; direction: string; type: string } | null;
+  /** Quick-reply button labels shown under this message, as ["Yes", "No"]. */
+  buttons?: string[] | null;
+  /** Set on a reaction row: the id of the message it reacts to. */
+  reactsToId?: string | null;
+  /** Reactions others placed ON this message, newest per side. */
+  reactions?: MessageReaction[];
+}
+
+export interface MessageReaction {
+  id: string;
+  /** Empty string means the reaction was removed. */
+  emoji: string;
+  direction: string;
+  sentAt: string;
+}
+
+/** Messages fetched per request. The server caps `limit` at 100. */
+const PAGE_SIZE = 100;
+
+/** Types that actually carry a file. Location/reaction/system are text-only. */
+const MEDIA_TYPES = new Set(['image', 'video', 'audio', 'voice', 'document']);
+
+/**
+ * Local calendar day of a timestamp, as "YYYY-M-D".
+ *
+ * Built from the LOCAL getters, not from the ISO string: slicing the ISO text
+ * would group by UTC day, so anything sent after 03:00 Israel time would be
+ * filed under the wrong date — including "today" appearing as yesterday.
+ */
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+/** "היום" / "אתמול" / a full date, matching how WhatsApp labels day separators. */
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  if (dayKey(iso) === dayKey(now.toISOString())) return 'היום';
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (dayKey(iso) === dayKey(yesterday.toISOString())) return 'אתמול';
+
+  // Within the last week, the weekday is easier to place than a numeric date.
+  const ageDays = (now.getTime() - d.getTime()) / 86_400_000;
+  if (ageDays < 7) {
+    return d.toLocaleDateString('he-IL', { weekday: 'long', day: 'numeric', month: 'numeric' });
+  }
+  return d.toLocaleDateString('he-IL', { day: 'numeric', month: 'numeric', year: 'numeric' });
+}
+
+/** Chronological order, with id as the tiebreaker for identical timestamps. */
+const bySentAt = (a: ChatMessage, b: ChatMessage): number =>
+  a.sentAt === b.sentAt ? a.id.localeCompare(b.id) : a.sentAt < b.sentAt ? -1 : 1;
+
+/**
+ * Fold reaction rows onto the messages they react to.
+ *
+ * A reaction is stored as its own message row, so it arrives both in the history
+ * fetch and as a live `message.added` event. Rendering those rows as bubbles
+ * would litter the thread with lone emoji, so each is attached to its target
+ * instead — except when the target is not loaded (reacted to something older
+ * than the current page), where it stays a bubble so the emoji is never lost.
+ *
+ * Two sources are merged: `reactions` computed server-side across all pages, and
+ * reaction rows sitting in the loaded list (which is how live ones show up).
+ * Whichever has the newest `sentAt` wins per (target, side), so replacing an
+ * emoji works and a removal — an empty emoji — clears it.
+ */
+function foldReactions(messages: ChatMessage[]): {
+  bubbles: ChatMessage[];
+  reactionsByTarget: Map<string, MessageReaction[]>;
+} {
+  const latest = new Map<string, MessageReaction>();
+  const keep = (targetId: string, r: MessageReaction) => {
+    const key = `${targetId}:${r.direction}`;
+    const prev = latest.get(key);
+    if (!prev || prev.sentAt <= r.sentAt) latest.set(key, r);
+  };
+
+  for (const m of messages) {
+    for (const r of m.reactions ?? []) keep(m.id, r);
+  }
+
+  const loadedIds = new Set(messages.map((m) => m.id));
+  const bubbles = messages.filter((m) => {
+    if (m.type !== 'reaction') return true;
+    if (!m.reactsToId || !loadedIds.has(m.reactsToId)) return true; // orphan — show it
+    keep(m.reactsToId, {
+      id: m.id,
+      emoji: (m.body ?? '').trim(),
+      direction: m.direction,
+      sentAt: m.sentAt,
+    });
+    return false;
+  });
+
+  const reactionsByTarget = new Map<string, MessageReaction[]>();
+  for (const [key, r] of latest) {
+    if (!r.emoji) continue; // removed
+    const targetId = key.slice(0, key.lastIndexOf(':'));
+    const list = reactionsByTarget.get(targetId);
+    if (list) list.push(r);
+    else reactionsByTarget.set(targetId, [r]);
+  }
+
+  return { bubbles, reactionsByTarget };
 }
 
 interface ContactInfo {
@@ -54,6 +162,7 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const { socket } = useRealtime();
   const bottomRef = useRef<HTMLDivElement>(null);
+  const skipAutoScroll = useRef(false);
 
   // Scroll to + briefly highlight a message (used when clicking a quote box).
   const scrollToMessage = useCallback((id: string) => {
@@ -84,10 +193,12 @@ export function ConversationView({ conversationId }: { conversationId: string | 
       })
       .catch(() => setDetail(null));
 
-    api<{ messages: ChatMessage[] }>(`/api/conversations/${conversationId}/messages`)
+    api<{ messages: ChatMessage[] }>(
+      `/api/conversations/${conversationId}/messages?limit=${PAGE_SIZE}`,
+    )
       .then((r) => {
         setMessages(r.messages);
-        setHasMore(r.messages.length === 50);
+        setHasMore(r.messages.length === PAGE_SIZE);
       })
       .catch(() => setMessages([]))
       .finally(() => setLoading(false));
@@ -100,6 +211,10 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     const onAdded = (data: { conversationId?: string; payload?: Record<string, unknown> }) => {
       if (data.conversationId !== conversationId || !data.payload) return;
       const p = data.payload as Record<string, unknown>;
+      // Keyed off the real media types — `type !== 'text'` also caught
+      // location/reaction/system, which have no file and rendered as a broken
+      // "📎 File" attachment.
+      const hasMedia = Boolean(p.hasMedia) || MEDIA_TYPES.has(String(p.type));
       const incoming: ChatMessage = {
         id: String(p.messageId),
         clientId: (p.clientId as string) ?? null,
@@ -108,11 +223,15 @@ export function ConversationView({ conversationId }: { conversationId: string | 
         status: String(p.status),
         body: (p.body as string) ?? null,
         sentAt: String(p.sentAt),
-        hasMedia: Boolean(p.hasMedia) || p.type !== 'text',
-        mediaUrl: p.type !== 'text' ? `/api/media/${String(p.messageId)}` : null,
+        hasMedia,
+        mediaUrl: hasMedia ? `/api/media/${String(p.messageId)}` : null,
         mediaMime: (p.mediaMime as string) ?? null,
         mediaName: (p.mediaName as string) ?? null,
         replyTo: (p.replyTo as ChatMessage['replyTo']) ?? null,
+        buttons: Array.isArray(p.buttons) ? (p.buttons as string[]) : null,
+        // Carried through so a live reaction lands on its target bubble; without
+        // it the row would sit in the thread as an unattached emoji.
+        reactsToId: (p.reactsToId as string) ?? null,
       };
       setMessages((prev) => (prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]));
     };
@@ -138,7 +257,38 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     };
   }, [socket, conversationId]);
 
+  // Safety net: re-sync the open thread from the API on every (re)connect.
+  // Outbox replay should already cover anything missed while the socket was
+  // down, but a dropped replay used to leave a message invisible until the page
+  // was reloaded. Merging a fresh page makes that unrecoverable state
+  // impossible — an inbound message can no longer go missing from the view.
   useEffect(() => {
+    if (!socket || !conversationId) return;
+    const resync = () => {
+      api<{ messages: ChatMessage[] }>(
+        `/api/conversations/${conversationId}/messages?limit=${PAGE_SIZE}`,
+      )
+        .then((r) => {
+          setMessages((prev) => {
+            const seen = new Set(prev.map((m) => m.id));
+            const missing = r.messages.filter((m) => !seen.has(m.id));
+            return missing.length ? [...prev, ...missing].sort(bySentAt) : prev;
+          });
+        })
+        .catch(() => undefined);
+    };
+    socket.on('connect', resync);
+    return () => {
+      socket.off('connect', resync);
+    };
+  }, [socket, conversationId]);
+
+  useEffect(() => {
+    // Prepending older messages must not yank the view back to the bottom.
+    if (skipAutoScroll.current) {
+      skipAutoScroll.current = false;
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
@@ -147,12 +297,22 @@ export function ConversationView({ conversationId }: { conversationId: string | 
     const oldest = messages[0];
     if (!oldest) return;
     setLoadingMore(true);
+    // Composite cursor: `before` is the oldest loaded message's sentAt, and
+    // `beforeId` breaks ties between messages sharing that timestamp — without
+    // it the server skips the whole tied group.
     api<{ messages: ChatMessage[] }>(
-      `/api/conversations/${conversationId}/messages?before=${oldest.id}`,
+      `/api/conversations/${conversationId}/messages?limit=${PAGE_SIZE}` +
+        `&before=${encodeURIComponent(oldest.sentAt)}` +
+        `&beforeId=${encodeURIComponent(oldest.id)}`,
     )
       .then((r) => {
-        setMessages((prev) => [...r.messages, ...prev]);
-        setHasMore(r.messages.length === 50);
+        setHasMore(r.messages.length === PAGE_SIZE);
+        if (r.messages.length === 0) return;
+        skipAutoScroll.current = true;
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id));
+          return [...r.messages.filter((m) => !seen.has(m.id)), ...prev];
+        });
       })
       .catch(() => undefined)
       .finally(() => setLoadingMore(false));
@@ -161,6 +321,9 @@ export function ConversationView({ conversationId }: { conversationId: string | 
   const handleSent = useCallback((m: ChatMessage) => {
     setMessages((prev) => (prev.some((x) => x.id === m.id) ? prev : [...prev, m]));
   }, []);
+
+  // Reaction rows are hidden from the thread and attached to their target bubble.
+  const { bubbles, reactionsByTarget } = useMemo(() => foldReactions(messages), [messages]);
 
   if (!conversationId) {
     return (
@@ -210,7 +373,7 @@ export function ConversationView({ conversationId }: { conversationId: string | 
       {/* Messages */}
       <div className="chat-canvas scroll-thin flex-1 overflow-y-auto px-6 py-4">
         {loading && <div className="text-center text-sm text-ink-muted">Loading…</div>}
-        {!loading && messages.length === 0 && (
+        {!loading && bubbles.length === 0 && (
           <div className="text-center text-sm text-ink-muted">No messages yet.</div>
         )}
         <div className="mx-auto flex max-w-3xl flex-col gap-1.5">
@@ -225,16 +388,25 @@ export function ConversationView({ conversationId }: { conversationId: string | 
               </button>
             </div>
           )}
-          {messages.map((m) => (
-            <Bubble
-              key={m.id}
-              message={m}
-              onOpenImage={setLightbox}
-              onReply={setReplyingTo}
-              onQuoteClick={scrollToMessage}
-              highlighted={highlightedId === m.id}
-            />
-          ))}
+          {bubbles.map((m, i) => {
+            // A separator opens every new calendar day, so a bubble showing only
+            // "14:30" always sits under a heading saying which day that was.
+            const prev = bubbles[i - 1];
+            const newDay = !prev || dayKey(prev.sentAt) !== dayKey(m.sentAt);
+            return (
+              <Fragment key={m.id}>
+                {newDay && <DateDivider iso={m.sentAt} />}
+                <Bubble
+                  message={m}
+                  reactions={reactionsByTarget.get(m.id)}
+                  onOpenImage={setLightbox}
+                  onReply={setReplyingTo}
+                  onQuoteClick={scrollToMessage}
+                  highlighted={highlightedId === m.id}
+                />
+              </Fragment>
+            );
+          })}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -286,12 +458,14 @@ export function ConversationView({ conversationId }: { conversationId: string | 
 
 function Bubble({
   message,
+  reactions,
   onOpenImage,
   onReply,
   onQuoteClick,
   highlighted,
 }: {
   message: ChatMessage;
+  reactions?: MessageReaction[];
   onOpenImage: (url: string) => void;
   onReply: (m: ChatMessage) => void;
   onQuoteClick: (id: string) => void;
@@ -299,15 +473,34 @@ function Bubble({
 }) {
   const outbound = message.direction === 'outbound';
   const time = new Date(message.sentAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+  // A reaction whose target never loaded. Shown plainly so it is never lost.
+  if (message.type === 'reaction') {
+    return (
+      <div className={'flex ' + (outbound ? 'justify-end' : 'justify-start')}>
+        <div className="my-1 flex items-center gap-1.5 rounded-full bg-black/5 px-2.5 py-1 text-xs text-ink-muted">
+          <span className="text-base leading-none">{message.body || '🚫'}</span>
+          <span>{message.body ? 'הגיב/ה להודעה קודמת' : 'הסיר/ה תגובה'}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div id={`msg-${message.id}`} className={'group flex ' + (outbound ? 'justify-end' : 'justify-start')}>
+    <div
+      id={`msg-${message.id}`}
+      className={
+        'group flex ' +
+        (outbound ? 'justify-end' : 'justify-start') +
+        // Room for the reaction chip, which overlaps the bubble's bottom edge.
+        (reactions?.length ? ' mb-3' : '')
+      }
+    >
       {/* Reply action (left of outbound bubbles) */}
-      {outbound && (
-        <ReplyButton onClick={() => onReply(message)} />
-      )}
+      {outbound && <ReplyButton onClick={() => onReply(message)} />}
       <div
         className={
-          'max-w-[75%] rounded-lg px-2.5 py-1.5 text-sm shadow-sm transition ' +
+          'relative max-w-[75%] rounded-lg px-2.5 py-1.5 text-sm shadow-sm transition ' +
           (outbound ? 'rounded-tr-none bg-chat-out' : 'rounded-tl-none bg-chat-in') +
           ' text-ink' +
           (highlighted ? ' ring-2 ring-brand-action' : '')
@@ -335,12 +528,79 @@ function Bubble({
             <RichText text={message.body} />
           </div>}
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-ink-muted">
-          <span>{time}</span>
+          {/* Hover shows the full date — the bubble itself only has room for the
+              time, and the day separator above may have scrolled out of view. */}
+          <span title={new Date(message.sentAt).toLocaleString('he-IL')}>{time}</span>
           {outbound && <StatusTick status={message.status} />}
         </div>
+        {message.buttons && message.buttons.length > 0 && <QuickReplyChips labels={message.buttons} />}
+        {/* Reaction chip, WhatsApp-style: overlapping the bubble's bottom corner. */}
+        {reactions && reactions.length > 0 && (
+          <div
+            className={
+              'absolute -bottom-2.5 flex items-center gap-0.5 rounded-full border border-black/5 ' +
+              'bg-white px-1.5 py-0.5 text-xs shadow-sm ' +
+              (outbound ? 'left-1.5' : 'right-1.5')
+            }
+            title={reactions.map((r) => (r.direction === 'outbound' ? `You: ${r.emoji}` : r.emoji)).join('  ')}
+          >
+            {reactions.map((r) => (
+              <span key={r.id} className="leading-none">
+                {r.emoji}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
       {/* Reply action (right of inbound bubbles) */}
       {!outbound && <ReplyButton onClick={() => onReply(message)} />}
+    </div>
+  );
+}
+
+/**
+ * Quick-reply chips under a bubble.
+ *
+ * A read-only echo of what the customer's WhatsApp renders — they tap on their
+ * phone, not here, and the tap comes back as an ordinary inbound message whose
+ * body is the button's label. Rendered as disabled buttons rather than plain
+ * text so it stays obvious this is the message's shape, not a control for us.
+ */
+function QuickReplyChips({ labels }: { labels: string[] }) {
+  return (
+    <div className="-mx-2.5 -mb-1.5 mt-1.5 border-t border-black/10">
+      {labels.map((label, i) => (
+        <div
+          key={`${label}-${i}`}
+          className={
+            'px-2.5 py-1.5 text-center text-sm font-medium text-brand-link ' +
+            (i > 0 ? 'border-t border-black/10' : '')
+          }
+          title="Your customer taps this in WhatsApp; the reply arrives as a normal message"
+        >
+          {label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Centred day heading between message groups, WhatsApp-style. */
+function DateDivider({ iso }: { iso: string }) {
+  return (
+    <div className="my-2 flex justify-center">
+      <span
+        className="rounded-full bg-white/90 px-3 py-1 text-[11px] font-medium text-ink-muted shadow-sm"
+        // Hovering gives the exact date even when the label reads "היום".
+        title={new Date(iso).toLocaleDateString('he-IL', {
+          weekday: 'long',
+          day: 'numeric',
+          month: 'long',
+          year: 'numeric',
+        })}
+      >
+        {dayLabel(iso)}
+      </span>
     </div>
   );
 }

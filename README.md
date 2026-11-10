@@ -107,6 +107,20 @@ See `apps/backend/.env.example` for the full list with comments. Critical:
 
 See `docs/03-build-plan.md` Phase 1 for the full deployment ticket.
 
+## Self-hosting with Docker Compose (e.g. Hetzner)
+
+Prefer to run it on your own server instead of Railway? The repo ships a
+self-contained Docker Compose stack (app + PostgreSQL + Caddy reverse proxy with
+automatic HTTPS):
+
+```bash
+cp .env.production.example .env   # then fill in secrets, Twilio, admin
+docker compose up -d --build
+```
+
+See **`docs/04-deploy-hetzner.md`** for the full step-by-step guide (server
+setup, admin bootstrap, attaching a domain + Let's Encrypt, backups).
+
 ## Status
 
 Skeleton scaffolding. Phase 1 of the build plan. Most endpoints are stubs that

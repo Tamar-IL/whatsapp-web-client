@@ -21,7 +21,8 @@
     "prisma:migrate": "npm --workspace apps/backend run prisma:migrate",
     "prisma:studio": "npm --workspace apps/backend run prisma:studio",
     "prisma:generate": "npm --workspace apps/backend run prisma:generate",
-    "hash-password": "npm --workspace apps/backend run hash-password"
+    "hash-password": "npm --workspace apps/backend run hash-password",
+    "mail-check": "npm --workspace apps/backend run mail-check"
   },
   "devDependencies": {
     "npm-run-all": "^4.1.5"
