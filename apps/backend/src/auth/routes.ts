@@ -6,7 +6,7 @@ import { prisma } from '../db/prisma';
 import { asyncHandler } from '../lib/asyncHandler';
 import { ApiError } from '../lib/errors';
 import { mailerConfigured, sendMail } from '../lib/mailer';
-import { logger } from '../config/logger';
+import { env } from '../config/env';
 import { requireAuth } from './middleware';
 import {
   LOGIN_CODE_MAX_ATTEMPTS,
@@ -26,15 +26,11 @@ const loginLimiter = rateLimit({
   message: { code: 'RATE_LIMITED', message: 'Too many login attempts. Try again in 15 minutes.' },
 });
 
-const emailKey = (req: Request) =>
-  `${req.ip}:${((req.body?.email as string | undefined) ?? '').trim().toLowerCase()}`;
-
 const codeRequestLimiter = rateLimit({
   windowMs: 15 * 60_000,
   max: 5,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: emailKey,
   message: { code: 'RATE_LIMITED', message: 'Too many code requests. Try again in 15 minutes.' },
 });
 
@@ -43,7 +39,6 @@ const codeVerifyLimiter = rateLimit({
   max: 10,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: emailKey,
   message: { code: 'RATE_LIMITED', message: 'Too many attempts. Try again in 15 minutes.' },
 });
 
@@ -92,32 +87,39 @@ authRouter.post(
 
 // ===== Forgot password → sign in with a one-time code sent by email =====
 
-const codeRequestSchema = z.object({ email: z.string().trim().email() });
-const codeVerifySchema = z.object({
-  email: z.string().trim().email(),
-  code: z.string().trim().regex(/^\d{6}$/),
-});
+const codeVerifySchema = z.object({ code: z.string().trim().regex(/^\d{6}$/) });
 
 /**
- * Email a 6-digit sign-in code. Always answers { ok: true } for a well-formed
- * email, whether or not an account exists, so the endpoint can't be used to
- * discover which addresses are registered.
+ * Single-user app: the account a code is for is always the admin
+ * (ADMIN_EMAIL), falling back to the first user if that env var is unset.
  */
+async function findAccountUser() {
+  if (env.ADMIN_EMAIL) {
+    const admin = await prisma.user.findUnique({ where: { email: env.ADMIN_EMAIL } });
+    if (admin) return admin;
+  }
+  return prisma.user.findFirst({ orderBy: { createdAt: 'asc' } });
+}
+
+/** "swenlly123@gmail.com" -> "sw*****3@gmail.com" — enough to recognise, not to harvest. */
+function maskEmail(email: string): string {
+  const [local = '', domain = ''] = email.split('@');
+  if (local.length <= 2) return `${local[0] ?? ''}*@${domain}`;
+  return `${local.slice(0, 2)}${'*'.repeat(Math.max(1, local.length - 3))}${local.slice(-1)}@${domain}`;
+}
+
+/** Forgot password: email a 6-digit sign-in code to the account's address. */
 authRouter.post(
   '/login-code/request',
   codeRequestLimiter,
   asyncHandler(async (req, res) => {
-    const parsed = codeRequestSchema.safeParse(req.body);
-    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', 'Enter a valid email address.');
     if (!mailerConfigured()) {
-      throw new ApiError(503, 'MAIL_NOT_CONFIGURED', 'Email sign-in is not available right now.');
+      throw new ApiError(503, 'MAIL_NOT_CONFIGURED', 'Email is not set up on the server.');
     }
 
-    const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
-    if (!user) {
-      res.json({ ok: true });
-      return;
-    }
+    const user = await findAccountUser();
+    if (!user) throw new ApiError(404, 'NO_ACCOUNT', 'No account exists yet.');
+    const sentTo = maskEmail(user.email);
 
     // Cooldown: if a code was just sent, don't send another — the first one still works.
     const recent = await prisma.loginCode.findFirst({
@@ -125,7 +127,7 @@ authRouter.post(
       select: { id: true },
     });
     if (recent) {
-      res.json({ ok: true });
+      res.json({ ok: true, sentTo });
       return;
     }
 
@@ -145,25 +147,20 @@ authRouter.post(
       }),
     ]);
 
-    try {
-      await sendMail({
-        to: user.email,
-        subject: `Your sign-in code: ${code}`,
-        text:
-          `Your sign-in code is: ${code}\n\n` +
-          `It expires in ${Math.round(LOGIN_CODE_TTL_MS / 60_000)} minutes and can be used once.\n` +
-          `If you didn't ask for this, you can ignore this email.`,
-      });
-    } catch (err) {
-      // Don't leak account existence through a different response; just log it.
-      logger.error({ err, userId: user.id }, 'failed to send login code email');
-    }
+    await sendMail({
+      to: user.email,
+      subject: `Your sign-in code: ${code}`,
+      text:
+        `Your sign-in code is: ${code}\n\n` +
+        `It expires in ${Math.round(LOGIN_CODE_TTL_MS / 60_000)} minutes and can be used once.\n` +
+        `If you didn't ask for this, you can ignore this email.`,
+    });
 
     await prisma.auditEvent.create({
       data: { userId: user.id, kind: 'auth.login_code.requested', ip: req.ip ?? null },
     });
 
-    res.json({ ok: true });
+    res.json({ ok: true, sentTo });
   }),
 );
 
@@ -172,11 +169,11 @@ authRouter.post(
   codeVerifyLimiter,
   asyncHandler(async (req, res) => {
     const parsed = codeVerifySchema.safeParse(req.body);
-    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', 'Enter your email and the 6-digit code.');
+    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', 'Enter the 6-digit code.');
 
     const invalid = () => new ApiError(401, 'BAD_CODE', 'The code is wrong or has expired. Request a new one.');
 
-    const user = await prisma.user.findUnique({ where: { email: parsed.data.email } });
+    const user = await findAccountUser();
     if (!user) throw invalid();
 
     const row = await prisma.loginCode.findFirst({

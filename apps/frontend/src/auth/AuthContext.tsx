@@ -10,8 +10,9 @@ interface AuthState {
   user: User | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  requestLoginCode: (email: string) => Promise<void>;
-  loginWithCode: (email: string, code: string) => Promise<void>;
+  /** Emails a sign-in code to the account; resolves to the masked address it went to. */
+  requestLoginCode: () => Promise<string>;
+  loginWithCode: (code: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -46,14 +47,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(user);
   }, []);
 
-  const requestLoginCode = useCallback(async (email: string) => {
-    await api('/api/auth/login-code/request', { method: 'POST', body: { email } });
+  const requestLoginCode = useCallback(async () => {
+    const { sentTo } = await api<{ sentTo: string }>('/api/auth/login-code/request', { method: 'POST', body: {} });
+    return sentTo;
   }, []);
 
-  const loginWithCode = useCallback(async (email: string, code: string) => {
+  const loginWithCode = useCallback(async (code: string) => {
     const { user } = await api<{ user: User }>('/api/auth/login-code/verify', {
       method: 'POST',
-      body: { email, code },
+      body: { code },
     });
     setUser(user);
   }, []);
