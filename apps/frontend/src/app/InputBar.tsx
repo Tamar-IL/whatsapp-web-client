@@ -2,6 +2,8 @@
  * Input bar — WhatsApp-style.
  *
  * Text: Enter sends, Shift+Enter newline; textarea auto-grows.
+ * Formatting: Ctrl+B bold, Ctrl+I italic, Ctrl+Shift+X strike, Ctrl+Shift+M monospace
+ * (same shortcuts as WhatsApp Web; they wrap the selection in WhatsApp markers).
  * Files: the paperclip STAGES a file (with a preview); it's only sent when you
  * press Send/Enter (optionally with the text as a caption). A × removes the stage.
  * Buttons: the 🔘 button attaches up to 3 quick-reply chips to the typed text.
@@ -17,6 +19,7 @@ import {
 } from 'react';
 import { api, apiUpload, ApiError } from '../api/client';
 import { TemplateModal } from './TemplateModal';
+import { RichText } from '../lib/richText';
 import type { ChatMessage } from './ConversationView';
 
 /**
@@ -393,7 +396,70 @@ export function InputBar({
     setShowSchedule((s) => !s);
   }
 
+  /**
+   * Wrap the selection in a WhatsApp formatting marker (*bold*, _italic_, ...).
+   * If the selection is already wrapped, the markers are removed instead.
+   * With no selection, the markers are inserted and the caret placed between them.
+   */
+  function toggleFormat(marker: string) {
+    const ta = taRef.current;
+    if (!ta) return;
+    const start = ta.selectionStart ?? text.length;
+    const end = ta.selectionEnd ?? start;
+    const m = marker.length;
+    let next: string;
+    let selStart: number;
+    let selEnd: number;
+    const selected = text.slice(start, end);
+    if (
+      start >= m &&
+      text.slice(start - m, start) === marker &&
+      text.slice(end, end + m) === marker
+    ) {
+      // Markers sit just outside the selection: remove them.
+      next = text.slice(0, start - m) + selected + text.slice(end + m);
+      selStart = start - m;
+      selEnd = end - m;
+    } else if (selected.length >= 2 * m && selected.startsWith(marker) && selected.endsWith(marker)) {
+      // Markers are part of the selection: remove them.
+      next = text.slice(0, start) + selected.slice(m, -m) + text.slice(end);
+      selStart = start;
+      selEnd = end - 2 * m;
+    } else {
+      // WhatsApp ignores markers next to spaces ("* bold *"), so keep spaces outside.
+      const lead = selected.length - selected.trimStart().length;
+      const trail = selected.length - selected.trimEnd().length;
+      const core = selected.trim();
+      const a = start + lead;
+      const b = end - trail;
+      next = core
+        ? text.slice(0, a) + marker + core + marker + text.slice(b)
+        : text.slice(0, start) + marker + marker + text.slice(end);
+      selStart = (core ? a : start) + m;
+      selEnd = core ? b + m : selStart;
+    }
+    onChangeText(next);
+    requestAnimationFrame(() => {
+      ta.focus();
+      ta.setSelectionRange(selStart, selEnd);
+    });
+  }
+
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const key = e.key.toLowerCase();
+      const marker =
+        !e.shiftKey && key === 'b' ? '*'
+        : !e.shiftKey && key === 'i' ? '_'
+        : e.shiftKey && key === 'x' ? '~'
+        : e.shiftKey && key === 'm' ? '```'
+        : null;
+      if (marker) {
+        e.preventDefault();
+        toggleFormat(marker);
+        return;
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void send();
@@ -656,6 +722,17 @@ export function InputBar({
         </div>
       )}
 
+      {/* Live preview: shows the formatting (bold, italic, ...) as it will look,
+          only when the text actually uses formatting markers. */}
+      {/[*_~]|```/.test(text) && (
+        <div className="mb-2 rounded-lg bg-white/70 px-3 py-1.5 text-sm text-ink">
+          <div className="mb-0.5 text-[10px] uppercase tracking-wide text-ink-muted">Preview</div>
+          <div className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words">
+            <RichText text={text} />
+          </div>
+        </div>
+      )}
+
       <div className="flex items-end gap-2">
         <input
           ref={fileRef}
@@ -768,6 +845,7 @@ export function InputBar({
             onKeyDown={onKeyDown}
             rows={1}
             placeholder={staged ? 'Add a caption (optional)' : 'Type a message'}
+            title="Ctrl+B bold · Ctrl+I italic · Ctrl+Shift+X strikethrough · Ctrl+Shift+M monospace"
             className="max-h-40 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
           />
         </div>
