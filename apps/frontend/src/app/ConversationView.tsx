@@ -524,7 +524,10 @@ function Bubble({
         {message.hasMedia && message.mediaUrl && (
           <MediaContent message={message} onOpenImage={onOpenImage} />
         )}
-        {message.body && <div className="whitespace-pre-wrap break-words">
+        {/* Outbound text is laid out right-to-left on OUR screen only: `dir` is
+            a rendering hint, the sent text is unchanged, so the customer's
+            WhatsApp shows it normally. */}
+        {message.body && <div dir={outbound ? 'rtl' : undefined} className="whitespace-pre-wrap break-words">
             <RichText text={message.body} />
           </div>}
         <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] text-ink-muted">

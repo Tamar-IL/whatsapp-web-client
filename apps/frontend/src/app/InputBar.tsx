@@ -6,11 +6,14 @@
  * (same shortcuts as WhatsApp Web; they wrap the selection in WhatsApp markers).
  * Files: the paperclip STAGES a file (with a preview); it's only sent when you
  * press Send/Enter (optionally with the text as a caption). A × removes the stage.
+ * Paste (Ctrl/Cmd+V) an image or drag & drop a file onto the bar to stage it.
  * Buttons: the 🔘 button attaches up to 3 quick-reply chips to the typed text.
  * 24h window closed → server returns 409 WINDOW_CLOSED → show template notice.
  */
 import {
   type ChangeEvent,
+  type ClipboardEvent,
+  type DragEvent,
   type FormEvent,
   type KeyboardEvent,
   useEffect,
@@ -31,14 +34,36 @@ import type { ChatMessage } from './ConversationView';
  * the right region quickly.
  */
 const EMOJI = [
-  '😀', '😂', '🤣', '🙂', '😉', '😊', '😍', '🥰',
-  '😘', '😎', '🤔', '🤗', '😅', '😢', '😭', '😡',
-  '🥳', '😴', '🤦', '🤷', '😱', '🤩', '😇', '🙃',
-  '👍', '👎', '👌', '🙏', '👏', '💪', '🤝', '✌️',
-  '👋', '☝️', '🤞', '🫶', '❤️', '🧡', '💛', '💚',
-  '💙', '💜', '🖤', '💔', '💕', '✨', '🔥', '⭐',
-  '🎉', '🎁', '✅', '❌', '❗', '❓', '💯', '👀',
-  '☀️', '🌙', '📞', '📩', '⏰', '🚗', '🏠', '🍀',
+  // faces
+  '😀', '😃', '😄', '😁', '😆', '😅', '😂', '🤣',
+  '🙂', '🙃', '😉', '😊', '😇', '🥰', '😍', '🤩',
+  '😘', '😗', '😚', '😋', '😛', '😜', '🤪', '😎',
+  '🤓', '🧐', '🤔', '🤗', '🤭', '🤫', '😐', '😶',
+  '🙄', '😏', '😬', '😌', '😔', '😪', '😴', '🤒',
+  '🤕', '🤢', '🤧', '🥵', '🥶', '😵', '🤯', '🥳',
+  '😕', '😟', '🙁', '😮', '😲', '😳', '🥺', '😢',
+  '😭', '😱', '😖', '😞', '😓', '😩', '😫', '😤',
+  '😡', '🤬', '😈', '💀', '🤡', '🤦', '🤷', '🙈',
+  // hands & people
+  '👍', '👎', '👌', '🤌', '✌️', '🤞', '🤟', '🤙',
+  '👋', '🤚', '✋', '👏', '🙌', '👐', '🤲', '🤝',
+  '🙏', '💪', '☝️', '👆', '👇', '👈', '👉', '✍️',
+  '👀', '👂', '🧠', '🫶', '🫡', '🤲', '🧏', '🕊️',
+  // hearts & symbols
+  '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '🤍',
+  '🤎', '💔', '❣️', '💕', '💞', '💓', '💗', '💖',
+  '✨', '⭐', '🌟', '💫', '🔥', '💥', '💯', '✅',
+  '❌', '❗', '❓', '⚠️', '➕', '➖', '➡️', '⬅️',
+  // celebration & objects
+  '🎉', '🎊', '🎁', '🎂', '🎈', '🏆', '🥇', '🎯',
+  '📞', '📱', '💻', '📩', '📧', '📝', '📌', '📎',
+  '📅', '⏰', '⌛', '💰', '💳', '🧾', '📦', '🔑',
+  '🔒', '💡', '🔔', '📢', '🔍', '🛒', '🏷️', '🧰',
+  // places, food & nature
+  '🏠', '🏢', '🚗', '🚚', '✈️', '🕍', '🕯️', '🍷',
+  '🍞', '🍯', '🍎', '🍇', '🍕', '☕', '🍰', '🥗',
+  '☀️', '🌙', '⛅', '🌧️', '❄️', '🌈', '🌸', '🌹',
+  '🍀', '🌳', '🐶', '🐱', '🐑', '🦋', '🕎', '🌟',
 ];
 
 /**
@@ -108,6 +133,7 @@ export function InputBar({
   const [scheduling, setScheduling] = useState(false);
   const [customWhen, setCustomWhen] = useState('');
   const [showEmoji, setShowEmoji] = useState(false);
+  const [dragging, setDragging] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showButtons, setShowButtons] = useState(false);
   const [buttonLabels, setButtonLabels] = useState<string[]>(['']);
@@ -175,8 +201,11 @@ export function InputBar({
   function onPickFile(e: ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (!file) return;
+    if (file) stageFile(file);
+  }
 
+  /** Stage a file from any source: picker, clipboard paste, or drag & drop. */
+  function stageFile(file: File) {
     const mime = file.type || '';
     // WhatsApp doesn't support SVG images.
     if (mime === 'image/svg+xml') {
@@ -204,8 +233,43 @@ export function InputBar({
     }
 
     setError(null);
+    if (stagedPreview) URL.revokeObjectURL(stagedPreview);
     setStaged(file);
     setStagedPreview(isImage ? URL.createObjectURL(file) : null);
+  }
+
+  /** Ctrl/Cmd+V with an image (screenshot, copied picture) or file on the clipboard. */
+  function onPaste(e: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(e.clipboardData?.files ?? []);
+    if (!files.length || !windowOpen) return; // plain text paste: leave default behaviour
+    e.preventDefault();
+    // Screenshots arrive as "image.png"; give them a readable name.
+    const f = files[0]!;
+    stageFile(
+      f.name && f.name !== 'image.png'
+        ? f
+        : new File([f], `pasted-${Date.now()}.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`, {
+            type: f.type,
+          }),
+    );
+  }
+
+  function onDragOver(e: DragEvent<HTMLElement>) {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return;
+    e.preventDefault();
+    setDragging(true);
+  }
+  function onDragLeave(e: DragEvent<HTMLElement>) {
+    // Ignore leaves into a child element; only clear when leaving the form.
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return;
+    setDragging(false);
+  }
+  function onDrop(e: DragEvent<HTMLElement>) {
+    setDragging(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (!file) return;
+    e.preventDefault();
+    stageFile(file);
   }
 
   function clearStaged() {
@@ -447,12 +511,18 @@ export function InputBar({
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      // Match the PHYSICAL key (e.code), not the typed character (e.key). With a
+      // Hebrew keyboard layout on Windows, Ctrl+B reports e.key as "נ", so a
+      // key-based check never matched there (macOS reports the Latin letter for
+      // Cmd shortcuts, which is why it kept working on Mac).
+      const code = e.code;
       const key = e.key.toLowerCase();
+      const is = (letter: string) => code === `Key${letter.toUpperCase()}` || key === letter;
       const marker =
-        !e.shiftKey && key === 'b' ? '*'
-        : !e.shiftKey && key === 'i' ? '_'
-        : e.shiftKey && key === 'x' ? '~'
-        : e.shiftKey && key === 'm' ? '```'
+        !e.shiftKey && is('b') ? '*'
+        : !e.shiftKey && is('i') ? '_'
+        : e.shiftKey && is('x') ? '~'
+        : e.shiftKey && is('m') ? '```'
         : null;
       if (marker) {
         e.preventDefault();
@@ -494,7 +564,18 @@ export function InputBar({
   const canSend = !sending && (Boolean(staged) || text.trim().length > 0);
 
   return (
-    <form onSubmit={send} className="relative bg-[#f0f2f5] px-4 py-3">
+    <form
+      onSubmit={send}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      className="relative bg-[#f0f2f5] px-4 py-3"
+    >
+      {dragging && (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center rounded-lg border-2 border-dashed border-brand-link bg-white/85 text-sm font-medium text-brand-primary">
+          שחרר כדי לצרף קובץ
+        </div>
+      )}
       {error && <div className="mb-2 text-center text-sm text-red-600">{error}</div>}
 
       {/* Schedule-send popover */}
@@ -651,7 +732,7 @@ export function InputBar({
               ×
             </button>
           </div>
-          <div className="scroll-thin grid max-h-52 grid-cols-8 gap-0.5 overflow-y-auto">
+          <div className="scroll-thin grid max-h-60 grid-cols-8 gap-0.5 overflow-y-auto">
             {EMOJI.map((e) => (
               <button
                 key={e}
@@ -732,6 +813,30 @@ export function InputBar({
           </div>
         </div>
       )}
+
+      {/* Formatting buttons — same as the keyboard shortcuts, for when a shortcut
+          is unavailable (browser-reserved keys, other keyboard layouts). */}
+      <div className="mb-1.5 flex items-center gap-1 px-1">
+        {[
+          { marker: '*', label: 'B', title: 'Bold (Ctrl/Cmd+B)', cls: 'font-bold' },
+          { marker: '_', label: 'I', title: 'Italic (Ctrl/Cmd+I)', cls: 'italic' },
+          { marker: '~', label: 'S', title: 'Strikethrough (Ctrl/Cmd+Shift+X)', cls: 'line-through' },
+          { marker: '```', label: '</>', title: 'Monospace (Ctrl/Cmd+Shift+M)', cls: 'font-mono text-xs' },
+        ].map((b) => (
+          <button
+            key={b.marker}
+            type="button"
+            title={b.title}
+            aria-label={b.title}
+            // mousedown would blur the textarea and lose the selection.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => toggleFormat(b.marker)}
+            className={`h-7 min-w-7 rounded px-1.5 text-sm text-ink-muted transition hover:bg-black/5 hover:text-brand-primary ${b.cls}`}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
 
       <div className="flex items-end gap-2">
         <input
@@ -843,9 +948,13 @@ export function InputBar({
             value={text}
             onChange={(e) => onChangeText(e.target.value)}
             onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            // RTL for what the operator types; the text itself is sent unchanged,
+            // so the customer sees it normally.
+            dir="rtl"
             rows={1}
             placeholder={staged ? 'Add a caption (optional)' : 'Type a message'}
-            title="Ctrl+B bold · Ctrl+I italic · Ctrl+Shift+X strikethrough · Ctrl+Shift+M monospace"
+            title="Ctrl/Cmd+B bold · Ctrl/Cmd+I italic · Ctrl+Shift+X strikethrough · Ctrl+Shift+M monospace"
             className="max-h-40 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
           />
         </div>
