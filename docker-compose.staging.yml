@@ -1,0 +1,61 @@
+# Test (staging) copy of the app — same code and Docker image as production,
+# with its OWN database, media volume, settings and Twilio sender.
+#
+# Runs next to production on the same server, from a SECOND checkout folder,
+# without its own Caddy: the production Caddy proxies a staging domain to it
+# over the shared "wweb-edge" network (see deploy/sites/staging.caddy.example).
+#
+# Usage (in the staging folder):
+#   cp .env.staging.example .env.staging     # fill it in
+#   ./deploy/staging.sh up                   # build + start
+# Full guide: docs/05-staging.md
+
+name: wweb-staging
+
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env.staging
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+      MEDIA_STORAGE_PATH: /app/apps/backend/storage
+    volumes:
+      - media:/app/apps/backend/storage
+    expose:
+      - "3000"
+    networks:
+      default:
+      edge:
+        aliases:
+          - staging-app
+
+networks:
+  edge:
+    name: wweb-edge
+    external: true
+
+volumes:
+  pgdata:
+  media:

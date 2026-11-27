@@ -63,8 +63,18 @@ services:
       TLS_OPTS: ${TLS_OPTS}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Extra sites, e.g. the staging (test) copy — see docs/05-staging.md.
+      - ./deploy/sites:/etc/caddy/sites:ro
       - caddy_data:/data
       - caddy_config:/config
+    networks:
+      - default
+      # Shared with the staging stack so this Caddy can proxy to it too.
+      - edge
+
+networks:
+  edge:
+    name: wweb-edge
 
 volumes:
   pgdata:

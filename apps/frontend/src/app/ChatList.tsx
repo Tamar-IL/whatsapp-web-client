@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useRealtime } from './RealtimeProvider';
 import { useAppData } from './AppData';
+import { useWindowFocus } from '../lib/useWindowFocus';
 import { Avatar } from './Avatar';
 import { Dropdown, Icons, Svg } from './ui';
 import { LabelPicker } from './LabelPicker';
@@ -404,10 +405,13 @@ function ChatRow({
 }) {
   const { features } = useAppData();
   const name = displayName(c);
-  // The chat that is open on screen is being read right now: never badge it,
-  // even in the moment before the server confirms the read.
-  const unreadCount = selected ? 0 : c.unreadCount;
-  const unread = unreadCount > 0 || (!selected && c.markedUnread);
+  // The open chat is being read only while you look at the window: then it is
+  // never badged (even before the server confirms the read). If the window is
+  // in the background, new messages there stay unread, like Google Chat.
+  const focused = useWindowFocus();
+  const readingNow = selected && focused;
+  const unreadCount = readingNow ? 0 : c.unreadCount;
+  const unread = unreadCount > 0 || (!readingNow && c.markedUnread);
   const last = c.lastMessage;
   const preview = (() => {
     if (!features.lastMessagePreview || !last) return c.window.open ? '24h window open' : 'Template required';

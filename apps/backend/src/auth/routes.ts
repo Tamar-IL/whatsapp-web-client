@@ -225,6 +225,6 @@ authRouter.get(
     });
     if (!user) throw new ApiError(401, 'UNAUTHENTICATED', 'Session invalid.');
     // Server-side settings the UI has to describe accurately rather than guess.
-    res.json({ user, config: { defaultCountryCode: env.DEFAULT_COUNTRY_CODE } });
+    res.json({ user, config: { defaultCountryCode: env.DEFAULT_COUNTRY_CODE, envLabel: env.ENV_LABEL ?? null } });
   }),
 );

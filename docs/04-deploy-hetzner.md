@@ -149,6 +149,9 @@ verification uses `PUBLIC_BASE_URL`, so it must match exactly.
 
 ---
 
+> **Test changes first:** a staging copy can run next to production — see
+> `docs/05-staging.md`.
+
 ## Day-2 operations
 
 **Update to the latest code** (always from `main`):

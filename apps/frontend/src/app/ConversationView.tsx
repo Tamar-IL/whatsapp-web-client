@@ -9,6 +9,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError } from '../api/client';
 import { useAppData } from './AppData';
+import { isWindowFocused, useWindowFocus } from '../lib/useWindowFocus';
 import { Avatar } from './Avatar';
 import { ContactPanel, type ConversationDetail } from './ContactPanel';
 import { ForwardModal } from './ForwardModal';
@@ -315,7 +316,8 @@ export function ConversationView({
         setLoadedFor(conversationId);
       });
 
-    api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => undefined);
+    // Opening a chat reads it only if you're looking at the window (not e.g. restored in a background tab).
+    if (isWindowFocused()) api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => undefined);
   }, [conversationId, loadDetail, loadPinned]);
 
   // Jump requested from outside (Starred list) once the chat has loaded.
@@ -353,8 +355,9 @@ export function ConversationView({
         origin: (p.origin as string) ?? null,
       };
       setMessages((prev) => (prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming]));
-      // The chat is open, so an inbound message is read as it arrives.
-      if (incoming.direction === 'inbound' && document.visibilityState === 'visible') {
+      // Read as it arrives only while you're actually looking at this window
+      // (like Google Chat). Otherwise it stays unread until you come back.
+      if (incoming.direction === 'inbound' && isWindowFocused()) {
         api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => undefined);
       }
     };
@@ -394,21 +397,12 @@ export function ConversationView({
     };
   }, [socket, conversationId, loadDetail, loadPinned]);
 
-  // Coming back to the tab with this chat open counts as reading it.
+  // Coming back to the window with this chat open counts as reading it.
+  const focused = useWindowFocus();
   useEffect(() => {
-    if (!conversationId) return;
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') {
-        api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => undefined);
-      }
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    window.addEventListener('focus', onVisible);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-      window.removeEventListener('focus', onVisible);
-    };
-  }, [conversationId]);
+    if (!conversationId || !focused) return;
+    api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => undefined);
+  }, [conversationId, focused]);
 
   // Safety net: re-sync the open thread from the API on every (re)connect.
   // Outbox replay should already cover anything missed while the socket was

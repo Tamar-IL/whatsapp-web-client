@@ -52,3 +52,10 @@ coverage/
 # source. whatsapp-site.tar in particular is >100MB, which GitHub rejects.
 *.tar
 *.patch
+
+# Server-only Caddy site files (examples and the placeholder stay tracked)
+deploy/sites/*.caddy
+!deploy/sites/00-placeholder.caddy
+
+# Staging secrets
+.env.staging

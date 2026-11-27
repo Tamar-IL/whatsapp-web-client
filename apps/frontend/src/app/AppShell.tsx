@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { api } from '../api/client';
 import { useAuth } from '../auth/AuthContext';
 import { ChatList } from './ChatList';
 import { ConversationView } from './ConversationView';
@@ -70,6 +71,7 @@ function Layout() {
 
   return (
     <div className="flex h-full flex-col">
+      <EnvBanner />
       <ConnectionBanner status={status} />
 
       <div className="flex flex-1 overflow-hidden">
@@ -144,6 +146,26 @@ function Layout() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/** Orange bar on a test (staging) copy, so it is never mistaken for the real app. */
+function EnvBanner() {
+  const [label, setLabel] = useState<string | null>(null);
+  useEffect(() => {
+    api<{ config?: { envLabel?: string | null } }>('/api/auth/me')
+      .then((r) => {
+        const l = r.config?.envLabel ?? null;
+        setLabel(l);
+        if (l && !document.title.startsWith(`[${l}]`)) document.title = `[${l}] ${document.title}`;
+      })
+      .catch(() => undefined);
+  }, []);
+  if (!label) return null;
+  return (
+    <div className="bg-amber-500 px-4 py-0.5 text-center text-xs font-semibold tracking-wide text-white">
+      {label} ENVIRONMENT — messages here go to the Twilio sandbox, not to real customers
     </div>
   );
 }

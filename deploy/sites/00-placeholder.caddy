@@ -1,0 +1,3 @@
+# Keeps the `import /etc/caddy/sites/*.caddy` in deploy/Caddyfile valid when no
+# extra site is configured. Real site files (e.g. staging.caddy) are created on
+# the server and are not committed.

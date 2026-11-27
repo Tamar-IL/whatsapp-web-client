@@ -1,0 +1,20 @@
+# Test (staging) copy of the app — reverse proxy from the production Caddy.
+#
+# On the server, in the PRODUCTION folder:
+#   cp deploy/sites/staging.caddy.example deploy/sites/staging.caddy
+#   # replace the domain and email below
+#   docker compose restart caddy
+#
+# The staging stack (docker-compose.staging.yml) joins the shared "wweb-edge"
+# network under the name "staging-app", which is how Caddy reaches it.
+
+staging.example.com {
+	encode zstd gzip
+
+	reverse_proxy staging-app:3000 {
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-Host {host}
+	}
+
+	tls you@example.com
+}

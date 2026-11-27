@@ -73,6 +73,9 @@ const schema = z.object({
   // it is the language Meta would review them under if they were ever submitted.
   QUICK_REPLY_LANGUAGE: z.string().min(2).default('he'),
 
+  // Set on a test (staging) copy, e.g. "TEST": shown as a bar across the app.
+  ENV_LABEL: z.string().max(30).optional(),
+
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   TRUST_PROXY: z.string().default('1'),
 });

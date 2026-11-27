@@ -46,7 +46,8 @@ Open `http://localhost:5173`, log in with `ADMIN_EMAIL` + the password you hashe
 │   ├── 01-spec-review.md       Surgical review of the spec
 │   ├── 02-deep-dives.md        Critical subsystem deep dives
 │   ├── 03-build-plan.md        Phase-by-phase ticket plan
-│   └── 04-deploy-hetzner.md    How the app runs on the private server
+│   ├── 04-deploy-hetzner.md    How the app runs on the private server
+│   └── 05-staging.md           Test copy (staging) next to production
 ├── apps/
 │   ├── backend/                Express + TypeScript + Prisma + Socket.IO
 │   └── frontend/               Vite + React + TypeScript + Tailwind
@@ -117,6 +118,12 @@ docker compose up -d --build
 Database migrations run automatically when the app starts. See
 **`docs/04-deploy-hetzner.md`** for the full guide (first-time setup, `.env`,
 domain + HTTPS, email, backups, troubleshooting).
+
+## Test environment
+
+A separate test copy (own database, Twilio WhatsApp Sandbox, orange TEST
+bar) can run next to production on the same server to try a branch before it
+reaches `main`. See `docs/05-staging.md`.
 
 ## Signing in
 

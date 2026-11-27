@@ -28,3 +28,7 @@
 
 	tls {$TLS_OPTS}
 }
+
+# Extra sites (e.g. deploy/sites/staging.caddy for the test copy).
+# Only files ending in .caddy are loaded; see docs/05-staging.md.
+import /etc/caddy/sites/*.caddy
