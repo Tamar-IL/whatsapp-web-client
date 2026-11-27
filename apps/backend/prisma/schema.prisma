@@ -380,3 +380,20 @@ model BulkRecipient {
   @@index([campaignId, status])
   @@map("bulk_recipients")
 }
+
+/// Actions ("tools") the AI may call: a MailerLite account or any HTTP endpoint.
+model AiAction {
+  id                   String   @id @default(cuid())
+  name                 String   @unique // function name the AI sees: lowercase_with_underscores
+  title                String
+  description          String   @default("") // tells the AI when to use it
+  kind                 String // 'http' | 'mailerlite'
+  enabled              Boolean  @default(true)
+  /// May the agent use it while answering customers? (Off = only in "Ask AI".)
+  allowInCustomerChats Boolean  @default(false)
+  config               Json
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@map("ai_actions")
+}

@@ -97,7 +97,7 @@ export function ForwardModal({ message, onClose }: { message: ChatMessage; onClo
                     }
                     className="h-4 w-4 accent-[#128C7E]"
                   />
-                  <Avatar contactId={c.contact.id} name={displayName(c)} phone={c.contact.phoneNumber} hasPhoto={c.contact.hasAvatar} version={c.contact.avatarVersion} size={32} />
+                  <Avatar contactId={c.contact.id} name={displayName(c)} phone={c.contact.phoneNumber} size={32} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-ink">{displayName(c)}</span>
                     {!c.window.open && <span className="text-[11px] text-amber-700">24h window closed — will be skipped</span>}

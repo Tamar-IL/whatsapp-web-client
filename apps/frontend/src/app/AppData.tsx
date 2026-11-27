@@ -9,7 +9,6 @@ import { useRealtime } from './RealtimeProvider';
 
 export interface Features {
   playbackSpeed: boolean;
-  avatars: boolean;
   lastMessagePreview: boolean;
   pinChats: boolean;
   archive: boolean;
@@ -96,7 +95,6 @@ interface AppDataState {
 /** Until settings load, everything shows (same as the server defaults). */
 const ALL_ON: Features = {
   playbackSpeed: true,
-  avatars: true,
   lastMessagePreview: true,
   pinChats: true,
   archive: true,

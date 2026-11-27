@@ -97,7 +97,7 @@ See `apps/backend/.env.example` for the full list with comments. Critical:
 - `SESSION_SECRET` — random 32+ bytes
 - `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` — bootstrap user
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_CONVERSATION_SERVICE_SID`, `TWILIO_WHATSAPP_SENDER`
-- `ANTHROPIC_API_KEY` *(optional)* — for the AI agent; can instead be pasted in Settings → AI agent
+- `OPENAI_API_KEY` *(optional)* — for the AI agent; can instead be pasted in Settings → AI agent
 
 ## Deployment (private server)
 
@@ -135,9 +135,8 @@ Everything optional can be switched off in **Settings → Features** (⋮ menu a
 the top of the chat list); a switched-off feature disappears from the UI and
 nothing is deleted.
 
-- **Chat list** — contact photos (uploaded by you; WhatsApp does not share
-  customers' pictures through Twilio) with coloured initials as fallback,
-  last-message preview, pin chats, archive, mark as unread, labels with filter
+- **Chat list** — WhatsApp's default avatar (customers' real photos are not
+  available through Twilio), last-message preview, pin chats, archive, mark as unread, labels with filter
   chips, filters for Unread / Needs you / AI.
 - **In a chat** — pinned-messages bar, per-message menu (reply, copy, star,
   pin, forward, retry failed), search across the whole history, time left in
@@ -154,12 +153,19 @@ nothing is deleted.
   `{first}` / `{phone}` tokens, label filter, live report, stop button.
 - **Away message** — automatic reply outside business hours (or always), with
   a per-chat cooldown.
-- **AI agent (Claude)** — switched on per chat, with its own instructions and
+- **AI agent (OpenAI)** — switched on per chat, with its own instructions and
   “good to know” customer info; permanent or for a date range; any time /
   only inside / only outside business hours; replies by itself or drafts for
   you; daily cap; pauses after you reply by hand; hands the chat to you
   (“Needs you”) when it lacks information. Global business info, house rules,
   model and master switch in Settings → AI agent.
+- **AI actions** — things the AI may look up before answering: a MailerLite
+  account (campaign open / click rates, groups, subscribers) or any HTTP
+  endpoint / webhook you define (URL with `{parameters}`, secret headers kept
+  on the server, a Test button). Each action is either for your own **Ask AI**
+  assistant only, or also allowed in customer chats.
+- **Ask AI** — your own assistant (✨ at the top of the chat list), can read the
+  open chat and use every enabled action.
 - **WhatsApp profile** — name, photo, about, description, address, category,
   email and website through Twilio's Senders API.
 - **Contacts** — CSV import / export.

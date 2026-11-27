@@ -21,7 +21,6 @@ export interface DayHours {
 export interface AppSettings {
   features: {
     playbackSpeed: boolean;
-    avatars: boolean;
     lastMessagePreview: boolean;
     pinChats: boolean;
     archive: boolean;
@@ -60,7 +59,7 @@ export interface AppSettings {
   ai: {
     enabled: boolean; // master switch — off stops every chat's agent at once
     model: string;
-    effort: 'low' | 'medium' | 'high';
+    effort: 'low' | 'medium' | 'high'; // reasoning models only
     businessInfo: string; // facts every agent may use (hours, prices, address…)
     globalInstructions: string; // tone / rules for all chats
     defaultMode: 'auto' | 'suggest';
@@ -79,7 +78,6 @@ const workday: DayHours = { on: true, from: '09:00', to: '18:00' };
 export const DEFAULTS: AppSettings = {
   features: {
     playbackSpeed: true,
-    avatars: true,
     lastMessagePreview: true,
     pinChats: true,
     archive: true,
@@ -121,7 +119,7 @@ export const DEFAULTS: AppSettings = {
   },
   ai: {
     enabled: false,
-    model: 'claude-opus-5-5',
+    model: 'gpt-5.5',
     effort: 'medium',
     businessInfo: '',
     globalInstructions:
@@ -135,7 +133,8 @@ export const DEFAULTS: AppSettings = {
   },
 };
 
-export const AI_MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'] as const;
+/** Suggestions for the model picker; the real list comes from the account (GET /api/ai/models). */
+export const AI_MODELS = ['gpt-5.5', 'gpt-5.4-mini', 'gpt-5.4-nano', 'gpt-4.1', 'gpt-4.1-mini'] as const;
 
 const KEY = 'app';
 const CACHE_MS = 10_000;
@@ -161,6 +160,9 @@ export async function getSettings(): Promise<AppSettings> {
   if (cache && Date.now() - cache.at < CACHE_MS) return cache.value;
   const row = await prisma.appSetting.findUnique({ where: { key: KEY } });
   const value = mergeKnown(DEFAULTS, row?.value ?? {});
+  // Settings saved while the agent ran on another provider.
+  if (value.ai.model.startsWith('claude')) value.ai.model = DEFAULTS.ai.model;
+  if (value.ai.apiKey.startsWith('sk-ant-')) value.ai.apiKey = '';
   cache = { at: Date.now(), value };
   return value;
 }
@@ -176,7 +178,8 @@ export async function updateSettings(patch: unknown): Promise<AppSettings> {
   next.ai.replyDelaySeconds = clamp(next.ai.replyDelaySeconds, 0, 600);
   next.ai.pauseAfterOperatorMinutes = clamp(next.ai.pauseAfterOperatorMinutes, 0, 24 * 60 * 7);
   next.ai.historyMessages = clamp(next.ai.historyMessages, 5, 100);
-  if (!(AI_MODELS as readonly string[]).includes(next.ai.model)) next.ai.model = DEFAULTS.ai.model;
+  next.ai.model = next.ai.model.trim();
+  if (!/^[\w.:-]{2,80}$/.test(next.ai.model) || next.ai.model.startsWith('claude')) next.ai.model = DEFAULTS.ai.model;
   if (!['low', 'medium', 'high'].includes(next.ai.effort)) next.ai.effort = 'medium';
   if (!['auto', 'suggest'].includes(next.ai.defaultMode)) next.ai.defaultMode = 'auto';
   if (!['outsideHours', 'always'].includes(next.away.when)) next.away.when = 'outsideHours';
@@ -200,7 +203,7 @@ export function publicSettings(s: AppSettings) {
   const { apiKey, ...ai } = s.ai;
   return {
     ...s,
-    ai: { ...ai, hasApiKey: Boolean(apiKey || process.env.ANTHROPIC_API_KEY), apiKeyFromEnv: !apiKey && Boolean(process.env.ANTHROPIC_API_KEY) },
+    ai: { ...ai, hasApiKey: Boolean(apiKey || process.env.OPENAI_API_KEY), apiKeyFromEnv: !apiKey && Boolean(process.env.OPENAI_API_KEY) },
   };
 }
 

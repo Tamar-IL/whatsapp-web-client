@@ -8,6 +8,7 @@ import { SettingsModal } from './SettingsModal';
 import { TemplateManager } from './TemplateManager';
 import { BulkSendModal } from './BulkSendModal';
 import { StarredModal } from './StarredModal';
+import { AskAiPanel } from './AskAiPanel';
 import { Dropdown, IconButton, Icons, Svg } from './ui';
 import { isNotificationMuted, playMessageDing, setNotificationMuted } from '../lib/sound';
 
@@ -32,6 +33,7 @@ function Layout() {
   const [jumpTo, setJumpTo] = useState<string | null>(null);
   const [muted, setMuted] = useState<boolean>(isNotificationMuted());
   const [panel, setPanel] = useState<Panel>(null);
+  const [askOpen, setAskOpen] = useState(false);
 
   // Ring on every new inbound message.
   useEffect(() => {
@@ -76,6 +78,11 @@ function Layout() {
           <header className="flex items-center justify-between bg-brand-primary px-3 py-2 text-white">
             <span className="truncate pl-1 text-sm font-medium">{user?.email}</span>
             <div className="ml-2 flex shrink-0 items-center gap-0.5">
+              {features.aiAgent && (
+                <IconButton light title="Ask AI" onClick={() => setAskOpen((v) => !v)}>
+                  <Svg d={Icons.sparkle} />
+                </IconButton>
+              )}
               {features.starMessages && (
                 <IconButton light title="Starred messages" onClick={() => setPanel('starred')}>
                   <Svg d={Icons.star} />
@@ -121,6 +128,9 @@ function Layout() {
         </main>
       </div>
 
+      {askOpen && features.aiAgent && (
+        <AskAiPanel conversationId={selectedId} chatName={selectedId ? 'this chat' : null} onClose={() => setAskOpen(false)} />
+      )}
       {panel === 'settings' && <SettingsModal onClose={() => setPanel(null)} />}
       {panel === 'templates' && <TemplateManager onClose={() => setPanel(null)} />}
       {panel === 'bulk' && <BulkSendModal onClose={() => setPanel(null)} />}

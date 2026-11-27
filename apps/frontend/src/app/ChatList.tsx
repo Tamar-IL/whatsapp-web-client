@@ -18,8 +18,6 @@ export interface ConversationListItem {
     displayName: string | null;
     profileName: string | null;
     phoneNumber: string;
-    hasAvatar: boolean;
-    avatarVersion: string | null;
     notes: string | null;
   };
   lastMessageAt: string | null;
@@ -406,7 +404,10 @@ function ChatRow({
 }) {
   const { features } = useAppData();
   const name = displayName(c);
-  const unread = c.unreadCount > 0 || c.markedUnread;
+  // The chat that is open on screen is being read right now: never badge it,
+  // even in the moment before the server confirms the read.
+  const unreadCount = selected ? 0 : c.unreadCount;
+  const unread = unreadCount > 0 || (!selected && c.markedUnread);
   const last = c.lastMessage;
   const preview = (() => {
     if (!features.lastMessagePreview || !last) return c.window.open ? '24h window open' : 'Template required';
@@ -428,8 +429,6 @@ function ChatRow({
         contactId={c.contact.id}
         name={name}
         phone={c.contact.phoneNumber}
-        hasPhoto={c.contact.hasAvatar}
-        version={c.contact.avatarVersion}
         size={46}
       />
       <div className="min-w-0 flex-1">
@@ -470,9 +469,9 @@ function ChatRow({
               </span>
             )}
             {features.pinChats && c.isPinned && <Svg d={Icons.pin} className="h-4 w-4 rotate-45 text-ink-muted" />}
-            {c.unreadCount > 0 ? (
-              <span className="rounded-full bg-brand-action px-1.5 text-xs font-semibold text-white">{c.unreadCount}</span>
-            ) : c.markedUnread ? (
+            {unreadCount > 0 ? (
+              <span className="rounded-full bg-brand-action px-1.5 text-xs font-semibold text-white">{unreadCount}</span>
+            ) : unread ? (
               <span className="h-3 w-3 rounded-full bg-brand-action" title="Marked as unread" />
             ) : null}
             <Dropdown

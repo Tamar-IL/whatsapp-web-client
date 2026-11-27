@@ -3,8 +3,8 @@
  * "Contact info"): photo, name, email, notes, labels, opt-out and the chat's
  * AI agent configuration.
  */
-import { useEffect, useRef, useState } from 'react';
-import { api, apiUpload } from '../api/client';
+import { useEffect, useState } from 'react';
+import { api } from '../api/client';
 import { useAppData } from './AppData';
 import { Avatar } from './Avatar';
 import { LabelPicker } from './LabelPicker';
@@ -33,7 +33,6 @@ export function ContactPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showLabels, setShowLabels] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setName(c.displayName ?? '');
@@ -66,23 +65,6 @@ export function ContactPanel({
     }
   }
 
-  async function uploadPhoto(file: File) {
-    setError(null);
-    const form = new FormData();
-    form.append('file', file);
-    try {
-      await apiUpload(`/api/contacts/${c.id}/avatar`, form);
-      onChanged();
-    } catch (e) {
-      setError((e as Error).message);
-    }
-  }
-
-  async function removePhoto() {
-    await api(`/api/contacts/${c.id}/avatar`, { method: 'DELETE' }).catch(() => undefined);
-    onChanged();
-  }
-
   const shownName = c.displayName ?? c.profileName ?? c.phoneNumber;
 
   return (
@@ -94,30 +76,7 @@ export function ContactPanel({
       <div className="scroll-thin flex-1 overflow-y-auto">
         {/* Identity */}
         <section className="flex flex-col items-center bg-white px-6 py-5">
-          <Avatar contactId={c.id} name={shownName} phone={c.phoneNumber} hasPhoto={c.hasAvatar} version={c.avatarVersion} size={120} />
-          {features.avatars && (
-            <div className="mt-2 flex gap-3 text-xs">
-              <button type="button" className="text-brand-link hover:underline" onClick={() => fileRef.current?.click()}>
-                {c.hasAvatar ? 'Change photo' : 'Add photo'}
-              </button>
-              {c.hasAvatar && (
-                <button type="button" className="text-ink-muted hover:text-red-600" onClick={() => void removePhoto()}>
-                  Remove
-                </button>
-              )}
-              <input
-                ref={fileRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  e.target.value = '';
-                  if (f) void uploadPhoto(f);
-                }}
-              />
-            </div>
-          )}
+          <Avatar size={120} />
           <div className="mt-3 text-lg text-ink">{shownName}</div>
           <div className="text-sm text-ink-muted" dir="ltr">
             {c.phoneNumber}

@@ -8,14 +8,16 @@ import { api, apiUpload } from '../api/client';
 import { useAppData, type Features, type Settings, type DayHours } from './AppData';
 import { ColorRow, LABEL_COLORS } from './LabelPicker';
 import { ErrorNote, Field, GhostButton, InfoNote, Modal, PrimaryButton, Toggle, inputCls } from './ui';
+import { ActionsTab } from './AiActions';
 
-type Tab = 'features' | 'hours' | 'away' | 'ai' | 'labels' | 'replies' | 'contacts' | 'profile';
+type Tab = 'features' | 'hours' | 'away' | 'ai' | 'actions' | 'labels' | 'replies' | 'contacts' | 'profile';
 
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'features', label: 'Features' },
   { key: 'hours', label: 'Business hours' },
   { key: 'away', label: 'Away message' },
   { key: 'ai', label: 'AI agent' },
+  { key: 'actions', label: 'AI actions' },
   { key: 'labels', label: 'Labels' },
   { key: 'replies', label: 'Saved replies' },
   { key: 'contacts', label: 'Contacts' },
@@ -52,6 +54,7 @@ export function SettingsModal({ onClose, initialTab = 'features' }: { onClose: (
               {tab === 'hours' && <HoursTab />}
               {tab === 'away' && <AwayTab />}
               {tab === 'ai' && <AiTab />}
+              {tab === 'actions' && <ActionsTab />}
               {tab === 'labels' && <LabelsTab />}
               {tab === 'replies' && <RepliesTab />}
               {tab === 'contacts' && <ContactsTab />}
@@ -86,7 +89,6 @@ const FEATURE_GROUPS: Array<{ title: string; items: Array<[keyof Features, strin
   {
     title: 'Chat list',
     items: [
-      ['avatars', 'Contact photos & coloured avatars'],
       ['lastMessagePreview', 'Last-message preview'],
       ['pinChats', 'Pin chats to the top'],
       ['archive', 'Archive chats'],
@@ -256,11 +258,8 @@ interface AiChatRow {
   blocked: string | null;
 }
 
-const MODEL_LABELS: Record<string, string> = {
-  'claude-opus-5-5': 'Claude Opus 5.5 — smartest (default)',
-  'claude-sonnet-5-5': 'Claude Sonnet 5.5 — fast & capable',
-  'claude-haiku-5-5': 'Claude Haiku 5.5 — fastest, cheapest',
-};
+/** Models that accept a reasoning-effort setting. */
+const isReasoningModel = (m: string) => /^(o\d|gpt-5|gpt-6)/.test(m);
 
 function AiTab() {
   const { settings, aiModels, toast } = useAppData();
@@ -276,6 +275,15 @@ function AiTab() {
   const [key, setKey] = useState('');
   const [testing, setTesting] = useState(false);
   const [chats, setChats] = useState<AiChatRow[] | null>(null);
+  const [accountModels, setAccountModels] = useState<string[]>([]);
+  const [model, setModel] = useState(ai.model);
+  useEffect(() => setModel(ai.model), [ai.model]);
+  useEffect(() => {
+    if (!ai.hasApiKey) return;
+    api<{ models: string[] }>('/api/ai/models')
+      .then((r) => setAccountModels(r.models))
+      .catch(() => setAccountModels([]));
+  }, [ai.hasApiKey]);
   const dirty =
     form.businessInfo !== ai.businessInfo ||
     form.globalInstructions !== ai.globalInstructions ||
@@ -314,17 +322,17 @@ function AiTab() {
       <SectionTitle>Connection</SectionTitle>
       {ai.hasApiKey ? (
         <InfoNote tone="ok">
-          An Anthropic API key is set{ai.apiKeyFromEnv ? ' (from the server environment)' : ''}.
+          An OpenAI API key is set{ai.apiKeyFromEnv ? ' (from the server environment)' : ''}.
         </InfoNote>
       ) : (
-        <InfoNote tone="warn">No API key yet. Create one at console.anthropic.com → API keys, and paste it here.</InfoNote>
+        <InfoNote tone="warn">No API key yet. Create one at platform.openai.com → API keys, and paste it here.</InfoNote>
       )}
       <div className="mb-3 flex gap-2">
         <input
           type="password"
           value={key}
           onChange={(e) => setKey(e.target.value)}
-          placeholder={ai.hasApiKey ? 'Replace key (sk-ant-…)' : 'sk-ant-…'}
+          placeholder={ai.hasApiKey ? 'Replace key (sk-…)' : 'sk-…'}
           className={inputCls}
           autoComplete="off"
           dir="ltr"
@@ -353,17 +361,26 @@ function AiTab() {
 
       <SectionTitle>Model</SectionTitle>
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Model">
-          <select value={ai.model} onChange={(e) => void save({ ai: { model: e.target.value } })} className={inputCls}>
-            {aiModels.map((m) => (
-              <option key={m} value={m}>
-                {MODEL_LABELS[m] ?? m}
-              </option>
-            ))}
-          </select>
+        <Field label="Model" hint={accountModels.length ? `${accountModels.length} models available on your account` : 'Type any OpenAI model name, e.g. gpt-5.5'}>
+          <div className="flex gap-1.5">
+            <input
+              list="openai-models"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              onBlur={() => model.trim() && model !== ai.model && void save({ ai: { model: model.trim() } })}
+              onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget as HTMLInputElement).blur()}
+              className={inputCls}
+              dir="ltr"
+            />
+            <datalist id="openai-models">
+              {[...new Set([...aiModels, ...accountModels])].map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
+          </div>
         </Field>
-        <Field label="Thinking effort" hint="Higher = more careful, slower and costlier.">
-          <select value={ai.effort} onChange={(e) => void save({ ai: { effort: e.target.value } })} className={inputCls}>
+        <Field label="Thinking effort" hint={isReasoningModel(model) ? 'Higher = more careful, slower and costlier.' : 'Not used by this model.'}>
+          <select value={ai.effort} disabled={!isReasoningModel(model)} onChange={(e) => void save({ ai: { effort: e.target.value } })} className={inputCls}>
             <option value="low">Low</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>

@@ -5,7 +5,10 @@ import { ApiError } from '../lib/errors';
 import { prisma } from '../db/prisma';
 import { withOutbox } from '../realtime/outbox';
 import { getSettings } from '../lib/settings';
-import { blockedReason, decide, errorText, testConnection } from '../lib/aiAgent';
+import type { Prisma } from '@prisma/client';
+import { askAssistant, blockedReason, decide, errorText, listModels, testConnection } from '../lib/aiAgent';
+import { SECRET_MASK, maskAction, testAction } from '../lib/aiActions';
+import { emitEphemeral } from '../realtime/io';
 
 export const aiRouter = Router();
 
@@ -121,6 +124,145 @@ aiRouter.post(
       res.json(await testConnection());
     } catch (err) {
       throw new ApiError(502, 'AI_FAILED', errorText(err));
+    }
+  }),
+);
+
+/** GET /api/ai/models — chat models this OpenAI key can use. */
+aiRouter.get(
+  '/models',
+  asyncHandler(async (_req, res) => {
+    try {
+      res.json({ models: await listModels() });
+    } catch (err) {
+      throw new ApiError(502, 'AI_FAILED', errorText(err));
+    }
+  }),
+);
+
+/** POST /api/ai/ask — the operator's own assistant. */
+aiRouter.post(
+  '/ask',
+  asyncHandler(async (req, res) => {
+    const parsed = z
+      .object({
+        messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(8000) })).min(1).max(40),
+        conversationId: z.string().nullable().optional(),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', 'Type a question.');
+    try {
+      res.json(await askAssistant(parsed.data.messages, parsed.data.conversationId));
+    } catch (err) {
+      throw new ApiError(502, 'AI_FAILED', errorText(err));
+    }
+  }),
+);
+
+// ===== Actions =====
+
+const paramSchema = z.object({
+  name: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_]{0,40}$/, 'Parameter names: letters, digits, _'),
+  description: z.string().max(300).default(''),
+  required: z.boolean().default(true),
+});
+
+const actionSchema = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9_]{1,40}$/, 'Name: lowercase letters, digits and _ (e.g. order_status).'),
+  title: z.string().trim().min(1).max(80),
+  description: z.string().max(1000).default(''),
+  kind: z.enum(['http', 'mailerlite']),
+  enabled: z.boolean().default(true),
+  allowInCustomerChats: z.boolean().default(false),
+  config: z.union([
+    z.object({ apiKey: z.string().max(2000) }),
+    z.object({
+      method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']),
+      url: z.string().url().max(2000),
+      headers: z.record(z.string(), z.string().max(4000)).default({}),
+      body: z.string().max(8000).default(''),
+      params: z.array(paramSchema).max(15).default([]),
+    }),
+  ]),
+});
+
+aiRouter.get(
+  '/actions',
+  asyncHandler(async (_req, res) => {
+    const rows = await prisma.aiAction.findMany({ orderBy: { createdAt: 'asc' } });
+    res.json({ actions: rows.map(maskAction) });
+  }),
+);
+
+/** Keep stored secrets when the browser sends back the mask. */
+function mergeSecrets(kind: string, next: Record<string, unknown>, prev: Record<string, unknown> | null) {
+  if (!prev) return next;
+  if (kind === 'mailerlite' && next.apiKey === SECRET_MASK) next.apiKey = prev.apiKey;
+  if (kind === 'http' && next.headers && typeof next.headers === 'object') {
+    const ph = (prev.headers ?? {}) as Record<string, string>;
+    next.headers = Object.fromEntries(
+      Object.entries(next.headers as Record<string, string>).map(([k, v]) => [k, v === SECRET_MASK ? ph[k] ?? '' : v]),
+    );
+  }
+  return next;
+}
+
+aiRouter.post(
+  '/actions',
+  asyncHandler(async (req, res) => {
+    const parsed = actionSchema.safeParse(req.body);
+    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', parsed.error.issues[0]?.message ?? 'Invalid action.');
+    if (await prisma.aiAction.findUnique({ where: { name: parsed.data.name } })) {
+      throw new ApiError(409, 'DUPLICATE', 'An action with this name already exists.');
+    }
+    const row = await prisma.aiAction.create({ data: { ...parsed.data, config: parsed.data.config as Prisma.InputJsonValue } });
+    emitEphemeral('library.changed', null, { kind: 'aiActions' });
+    res.status(201).json({ action: maskAction(row) });
+  }),
+);
+
+aiRouter.put(
+  '/actions/:id',
+  asyncHandler(async (req, res) => {
+    const parsed = actionSchema.safeParse(req.body);
+    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', parsed.error.issues[0]?.message ?? 'Invalid action.');
+    const prev = await prisma.aiAction.findUnique({ where: { id: req.params.id! } });
+    if (!prev) throw new ApiError(404, 'NOT_FOUND', 'Action not found.');
+    const dup = await prisma.aiAction.findFirst({ where: { name: parsed.data.name, id: { not: prev.id } } });
+    if (dup) throw new ApiError(409, 'DUPLICATE', 'An action with this name already exists.');
+    const config = mergeSecrets(parsed.data.kind, { ...parsed.data.config }, prev.kind === parsed.data.kind ? (prev.config as Record<string, unknown>) : null);
+    const row = await prisma.aiAction.update({
+      where: { id: prev.id },
+      data: { ...parsed.data, config: config as Prisma.InputJsonValue },
+    });
+    emitEphemeral('library.changed', null, { kind: 'aiActions' });
+    res.json({ action: maskAction(row) });
+  }),
+);
+
+aiRouter.delete(
+  '/actions/:id',
+  asyncHandler(async (req, res) => {
+    await prisma.aiAction.delete({ where: { id: req.params.id! } }).catch(() => undefined);
+    emitEphemeral('library.changed', null, { kind: 'aiActions' });
+    res.json({ ok: true });
+  }),
+);
+
+/** POST /api/ai/actions/:id/test — run it now with sample arguments and show the raw result. */
+aiRouter.post(
+  '/actions/:id/test',
+  asyncHandler(async (req, res) => {
+    const a = await prisma.aiAction.findUnique({ where: { id: req.params.id! } });
+    if (!a) throw new ApiError(404, 'NOT_FOUND', 'Action not found.');
+    const fn = typeof req.body?.fn === 'string' ? req.body.fn : undefined;
+    const args = req.body?.args && typeof req.body.args === 'object' ? (req.body.args as Record<string, unknown>) : {};
+    try {
+      const result = await testAction(a, fn, args);
+      const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      res.json({ ok: true, result: text.slice(0, 20000) });
+    } catch (err) {
+      res.json({ ok: false, error: err instanceof Error ? err.message : 'Failed.' });
     }
   }),
 );

@@ -5,14 +5,11 @@ import { asyncHandler } from '../lib/asyncHandler';
 import { ApiError } from '../lib/errors';
 import { prisma } from '../db/prisma';
 import { withOutbox } from '../realtime/outbox';
-import { saveMedia, readMedia, mediaExists } from '../lib/mediaStore';
 import { normalizePhone } from './conversations';
 import { syntheticConversationSid } from '../twilio/programmable';
 
 export const contactsRouter = Router();
 
-const AVATAR_MAX = 3 * 1024 * 1024;
-const avatarUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: AVATAR_MAX } });
 const csvUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 /** Tell every open tab that the chats of this contact changed. */
@@ -52,60 +49,6 @@ contactsRouter.patch(
     });
     await touchContact(id, 'contact');
     res.json({ contact });
-  }),
-);
-
-/**
- * Contact photos.
- *
- * WhatsApp does not give businesses their customers' profile pictures — Twilio
- * passes on the name only — so the photo is one the operator uploads. Without
- * one the UI shows a coloured initial.
- */
-contactsRouter.post(
-  '/:id/avatar',
-  avatarUpload.single('file'),
-  asyncHandler(async (req, res) => {
-    const id = req.params.id!;
-    const file = req.file;
-    if (!file || !file.mimetype.startsWith('image/') || file.mimetype === 'image/svg+xml') {
-      throw new ApiError(400, 'BAD_INPUT', 'Choose a JPG, PNG or WebP image (up to 3 MB).');
-    }
-    const existing = await prisma.contact.findUnique({ where: { id }, select: { id: true } });
-    if (!existing) throw new ApiError(404, 'NOT_FOUND', 'Contact not found.');
-    // A fresh key per upload doubles as a cache buster for the <img> URL.
-    const key = `avatar-${id}-${Date.now()}`;
-    await saveMedia(key, file.buffer);
-    await saveMedia(`${key}.mime`, Buffer.from(file.mimetype));
-    await prisma.contact.update({ where: { id }, data: { avatarFile: key } });
-    await touchContact(id, 'avatar');
-    res.json({ ok: true, avatarVersion: key });
-  }),
-);
-
-contactsRouter.delete(
-  '/:id/avatar',
-  asyncHandler(async (req, res) => {
-    const id = req.params.id!;
-    await prisma.contact.update({ where: { id }, data: { avatarFile: null } });
-    await touchContact(id, 'avatar');
-    res.json({ ok: true });
-  }),
-);
-
-contactsRouter.get(
-  '/:id/avatar',
-  asyncHandler(async (req, res) => {
-    const c = await prisma.contact.findUnique({ where: { id: req.params.id! }, select: { avatarFile: true } });
-    if (!c?.avatarFile || !(await mediaExists(c.avatarFile))) {
-      throw new ApiError(404, 'NOT_FOUND', 'No photo.');
-    }
-    const mime = (await mediaExists(`${c.avatarFile}.mime`))
-      ? (await readMedia(`${c.avatarFile}.mime`)).toString()
-      : 'image/jpeg';
-    res.setHeader('Content-Type', mime);
-    res.setHeader('Cache-Control', 'private, max-age=86400');
-    res.send(await readMedia(c.avatarFile));
   }),
 );
 

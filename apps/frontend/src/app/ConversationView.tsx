@@ -394,6 +394,22 @@ export function ConversationView({
     };
   }, [socket, conversationId, loadDetail, loadPinned]);
 
+  // Coming back to the tab with this chat open counts as reading it.
+  useEffect(() => {
+    if (!conversationId) return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        api(`/api/conversations/${conversationId}/read`, { method: 'POST' }).catch(() => undefined);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [conversationId]);
+
   // Safety net: re-sync the open thread from the API on every (re)connect.
   // Outbox replay should already cover anything missed while the socket was
   // down, but a dropped replay used to leave a message invisible until the page
@@ -566,8 +582,6 @@ export function ConversationView({
                 contactId={detail.contact.id}
                 name={title}
                 phone={detail.contact.phoneNumber}
-                hasPhoto={detail.contact.hasAvatar}
-                version={detail.contact.avatarVersion}
                 size={40}
               />
             ) : (

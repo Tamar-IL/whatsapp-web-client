@@ -41,8 +41,6 @@ export function serializeConversation(c: ConversationFull) {
       optOut: c.contact.optOut,
       notes: c.contact.notes,
       email: c.contact.email,
-      hasAvatar: Boolean(c.contact.avatarFile),
-      avatarVersion: c.contact.avatarFile ?? null,
     },
     lastMessageAt: c.lastMessageAt,
     lastMessage: last
