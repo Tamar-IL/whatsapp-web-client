@@ -5,6 +5,9 @@ import { asyncHandler } from '../lib/asyncHandler';
 import { ApiError } from '../lib/errors';
 import { prisma } from '../db/prisma';
 import { emitEphemeral } from '../realtime/io';
+import multer from 'multer';
+import { env } from '../config/env';
+import { saveMedia } from '../lib/mediaStore';
 
 export const scheduledRouter = Router();
 
@@ -31,6 +34,9 @@ interface ScheduledDto {
   errorMessage: string | null;
   sentMessageId: string | null;
   createdAt: string;
+  mediaMime: string | null;
+  mediaName: string | null;
+  mediaSize: number | null;
 }
 
 function toDto(row: {
@@ -44,6 +50,9 @@ function toDto(row: {
   errorMessage: string | null;
   sentMessageId: string | null;
   createdAt: Date;
+  mediaMime?: string | null;
+  mediaName?: string | null;
+  mediaSize?: number | null;
 }): ScheduledDto {
   return {
     id: row.id,
@@ -56,6 +65,9 @@ function toDto(row: {
     errorMessage: row.errorMessage,
     sentMessageId: row.sentMessageId,
     createdAt: row.createdAt.toISOString(),
+    mediaMime: row.mediaMime ?? null,
+    mediaName: row.mediaName ?? null,
+    mediaSize: row.mediaSize ?? null,
   };
 }
 
@@ -106,6 +118,58 @@ scheduledRouter.post(
     });
 
     const dto = toDto(row);
+    emitEphemeral('scheduled.added', conv.id, dto);
+    res.json({ scheduled: dto });
+  }),
+);
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: env.MEDIA_MAX_BYTES } });
+
+/**
+ * POST /api/scheduled/media — schedule a FILE (with an optional caption).
+ * Multipart: file, conversationId, scheduledFor (ISO), clientId, caption?.
+ * The file waits on disk as "sched-<id>" until the scheduler sends it.
+ */
+scheduledRouter.post(
+  '/media',
+  upload.single('file'),
+  asyncHandler(async (req, res) => {
+    const file = req.file;
+    const conversationId = String(req.body?.conversationId ?? '');
+    const when = new Date(String(req.body?.scheduledFor ?? ''));
+    const clientId = String(req.body?.clientId ?? '') || `c_${Date.now()}`;
+    const caption = String(req.body?.caption ?? '').trim();
+    if (!file || !conversationId) throw new ApiError(400, 'BAD_INPUT', 'A file and conversationId are required.');
+    const lead = when.getTime() - Date.now();
+    if (Number.isNaN(when.getTime()) || lead < MIN_LEAD_MS) {
+      throw new ApiError(400, 'BAD_TIME', 'Pick a time at least a minute from now.');
+    }
+    if (lead > MAX_LEAD_MS) throw new ApiError(400, 'BAD_TIME', 'You can only schedule up to 60 days ahead.');
+    const conv = await prisma.conversation.findUnique({ where: { id: conversationId } });
+    if (!conv) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found.');
+
+    const row = await prisma.scheduledMessage.create({
+      data: {
+        conversationId: conv.id,
+        body: caption,
+        scheduledFor: when,
+        clientId,
+        createdById: req.session.userId ?? null,
+        mediaMime: file.mimetype || 'application/octet-stream',
+        mediaName: file.originalname,
+        mediaSize: file.size,
+        // Not 'pending' until the file is safely on disk, so the scheduler can't race it.
+        status: 'uploading',
+      },
+    });
+    try {
+      await saveMedia(`sched-${row.id}`, file.buffer);
+    } catch {
+      await prisma.scheduledMessage.delete({ where: { id: row.id } });
+      throw new ApiError(500, 'STORAGE_FAILED', 'Could not store the file on the server.');
+    }
+    const ready = await prisma.scheduledMessage.update({ where: { id: row.id }, data: { status: 'pending' } });
+    const dto = toDto(ready);
     emitEphemeral('scheduled.added', conv.id, dto);
     res.json({ scheduled: dto });
   }),

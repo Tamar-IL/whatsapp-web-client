@@ -8,6 +8,8 @@ import { withOutbox } from '../realtime/outbox';
 import { twilioClient } from '../twilio/client';
 import { env } from '../config/env';
 import { logger } from '../config/logger';
+import { noteOperatorReply } from '../lib/serialize';
+import { emitEphemeral } from '../realtime/io';
 
 export const templatesRouter = Router();
 
@@ -19,9 +21,8 @@ export const templatesRouter = Router();
  * WhatsApp rejects free-form text there, so this path deliberately does NOT
  * perform the window check that api/messages.ts does.
  *
- * Templates cannot be created from here. They are written in the Twilio Content
- * Template Builder and must be approved by Meta before they can be sent; this
- * only lists what already exists and sends it.
+ * Templates are created here (or in the Twilio Content Template Builder), then
+ * submitted to Meta for approval. Only approved ones can be sent.
  */
 
 export interface TemplateVariable {
@@ -40,6 +41,16 @@ export interface TemplateOut {
   category: string | null;
   /** 'approved' | 'pending' | 'rejected' | 'unsubmitted' | … */
   status: string;
+  /** Meta's reason when status is 'rejected'. */
+  rejectionReason: string | null;
+  /** The WhatsApp template name it was submitted under. */
+  approvalName: string | null;
+  /** 'text' | 'quick-reply' | 'call-to-action' | 'media' | … (the Content type, without "twilio/"). */
+  kind: string;
+  /** Button labels / actions, for preview and duplication. */
+  actions: Array<{ type: string; title: string; value?: string }>;
+  createdAt: string | null;
+  updatedAt: string | null;
 }
 
 /**
@@ -68,15 +79,42 @@ function extractBody(types: Record<string, unknown> | null | undefined): string 
  * it is known to appear rather than trusting one shape. Unknown reads as
  * 'unsubmitted', which the UI shows as not-sendable — the safe direction.
  */
-function extractApproval(raw: unknown): { status: string; category: string | null } {
-  const a = raw as
-    | { status?: unknown; category?: unknown; whatsapp?: { status?: unknown; category?: unknown } }
-    | null
-    | undefined;
+function extractApproval(raw: unknown): {
+  status: string;
+  category: string | null;
+  rejectionReason: string | null;
+  name: string | null;
+} {
+  type Node = { status?: unknown; category?: unknown; rejection_reason?: unknown; name?: unknown };
+  const a = raw as (Node & { whatsapp?: Node }) | null | undefined;
   const node = a?.whatsapp ?? a;
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : null);
   const status = typeof node?.status === 'string' ? node.status.toLowerCase() : 'unsubmitted';
-  const category = typeof node?.category === 'string' ? node.category : null;
-  return { status, category };
+  return {
+    status,
+    category: str(node?.category),
+    rejectionReason: str(node?.rejection_reason),
+    name: str(node?.name),
+  };
+}
+
+/** Which Content type a template is, and its buttons/actions. */
+function extractKind(types: Record<string, unknown> | null | undefined): {
+  kind: string;
+  actions: TemplateOut['actions'];
+} {
+  if (!types) return { kind: 'text', actions: [] };
+  const keys = Object.keys(types);
+  const preferred = keys.find((k) => k !== 'twilio/text') ?? keys[0] ?? 'twilio/text';
+  const node = types[preferred] as { actions?: unknown } | undefined;
+  const actions = Array.isArray(node?.actions)
+    ? (node!.actions as Array<Record<string, unknown>>).map((a) => ({
+        type: String(a.type ?? 'QUICK_REPLY'),
+        title: String(a.title ?? ''),
+        value: a.url ? String(a.url) : a.phone ? String(a.phone) : a.id ? String(a.id) : undefined,
+      }))
+    : [];
+  return { kind: preferred.replace(/^twilio\//, ''), actions };
 }
 
 /** Placeholders Twilio declares for a template, as {"1": "Customer_Name"}. */
@@ -100,12 +138,13 @@ export function renderTemplate(body: string, variables: Record<string, string>):
 const CACHE_MS = 5 * 60 * 1000;
 let cache: { at: number; templates: TemplateOut[] } | null = null;
 
-async function loadTemplates(force = false): Promise<TemplateOut[]> {
+export async function loadTemplates(force = false): Promise<TemplateOut[]> {
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.templates;
 
   const rows = await twilioClient.content.v1.contentAndApprovals.list({ limit: 200 });
   const templates: TemplateOut[] = rows.map((r) => {
-    const { status, category } = extractApproval(r.approvalRequests);
+    const { status, category, rejectionReason, name } = extractApproval(r.approvalRequests);
+    const { kind, actions } = extractKind(r.types as Record<string, unknown>);
     return {
       sid: r.sid,
       friendlyName: r.friendlyName,
@@ -114,8 +153,16 @@ async function loadTemplates(force = false): Promise<TemplateOut[]> {
       variables: extractVariables(r.variables as Record<string, unknown>),
       category,
       status,
+      rejectionReason,
+      approvalName: name,
+      kind,
+      actions,
+      createdAt: r.dateCreated ? new Date(r.dateCreated).toISOString() : null,
+      updatedAt: r.dateUpdated ? new Date(r.dateUpdated).toISOString() : null,
     };
   });
+  // Quick-reply chips made by the in-chat 🔘 button are internal plumbing, not templates.
+  templates.splice(0, templates.length, ...templates.filter((t) => !/^qr_[0-9a-f]{16}$/.test(t.friendlyName)));
 
   cache = { at: Date.now(), templates };
   return templates;
@@ -256,6 +303,7 @@ templatesRouter.post(
       return m;
     });
 
+    await noteOperatorReply(conv.id);
     await prisma.auditEvent.create({
       data: {
         userId: req.session.userId ?? null,
@@ -278,3 +326,220 @@ templatesRouter.post(
     });
   }),
 );
+
+
+// ===== Template management: create / duplicate / submit / delete =====
+
+/** Call the Content API with a JSON body. client.request() never throws on 4xx, so check by hand. */
+async function contentApi(method: 'get' | 'post' | 'delete', uri: string, data?: object) {
+  let res: { statusCode: number; body: unknown };
+  try {
+    res = await twilioClient.request({
+      method,
+      uri,
+      ...(data !== undefined && { headers: { 'Content-Type': 'application/json' }, data }),
+    });
+  } catch (err) {
+    logger.error({ err, uri }, 'Twilio Content API unreachable');
+    throw new ApiError(502, 'TWILIO_UNREACHABLE', 'Could not reach Twilio. Try again.');
+  }
+  const body = (typeof res.body === 'string' ? safeJson(res.body) : res.body) as
+    | { message?: string; code?: number }
+    | null;
+  if (res.statusCode >= 300) {
+    logger.warn({ status: res.statusCode, body, uri }, 'Twilio Content API rejected request');
+    throw new ApiError(
+      res.statusCode === 404 ? 404 : 400,
+      'TWILIO_REJECTED',
+      `Twilio: ${body?.message ?? `request failed (${res.statusCode})`}`,
+    );
+  }
+  return body as Record<string, unknown> | null;
+}
+
+function safeJson(t: string): unknown {
+  try {
+    return JSON.parse(t);
+  } catch {
+    return null;
+  }
+}
+
+/** WhatsApp template names: lowercase letters, digits and underscores. */
+function toApprovalName(s: string): string {
+  return (
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9_]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 512) || `template_${Date.now()}`
+  );
+}
+
+const actionSchema = z.object({
+  type: z.enum(['QUICK_REPLY', 'URL', 'PHONE_NUMBER']),
+  title: z.string().trim().min(1).max(25),
+  value: z.string().trim().max(2000).optional(),
+});
+
+const createSchema = z.object({
+  friendlyName: z.string().trim().min(1).max(200),
+  language: z.string().trim().min(2).max(10).default('he'),
+  body: z.string().min(1).max(1024),
+  /** Sample value for each {{n}} — Meta reviews the template with these. */
+  variables: z.record(z.string(), z.string().max(200)).default({}),
+  actions: z.array(actionSchema).max(10).default([]),
+  /** Submit to WhatsApp right away. */
+  submit: z.boolean().default(false),
+  category: z.enum(['UTILITY', 'MARKETING', 'AUTHENTICATION']).default('UTILITY'),
+  approvalName: z.string().max(512).optional(),
+});
+
+/**
+ * POST /api/templates — create a template (optionally submitting it for approval).
+ *
+ * Kind follows from the actions: none → text, quick replies → quick-reply,
+ * URL / phone → call-to-action. "Duplicate" in the UI is this same call with
+ * the original's fields pre-filled.
+ */
+templatesRouter.post(
+  '/',
+  asyncHandler(async (req, res) => {
+    const parsed = createSchema.safeParse(req.body);
+    if (!parsed.success) {
+      throw new ApiError(400, 'BAD_INPUT', parsed.error.issues[0]?.message ?? 'Invalid template.');
+    }
+    const t = parsed.data;
+
+    // Every {{n}} needs a sample value or Meta rejects the template outright.
+    const placeholders = [...new Set([...t.body.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => m[1]!))];
+    const missing = placeholders.filter((k) => !t.variables[k]?.trim());
+    if (missing.length) {
+      throw new ApiError(400, 'MISSING_SAMPLES', `Give an example value for ${missing.map((k) => `{{${k}}}`).join(', ')}.`);
+    }
+
+    const quick = t.actions.filter((a) => a.type === 'QUICK_REPLY');
+    const cta = t.actions.filter((a) => a.type !== 'QUICK_REPLY');
+    if (quick.length && cta.length) {
+      throw new ApiError(400, 'MIXED_BUTTONS', 'Use either quick-reply buttons or link/phone buttons, not both.');
+    }
+    for (const a of cta) {
+      if (!a.value) throw new ApiError(400, 'BAD_INPUT', `Button "${a.title}" needs a ${a.type === 'URL' ? 'link' : 'phone number'}.`);
+    }
+
+    let types: Record<string, unknown>;
+    if (quick.length) {
+      types = {
+        'twilio/quick-reply': { body: t.body, actions: quick.map((a, i) => ({ title: a.title, id: `btn_${i + 1}` })) },
+        'twilio/text': { body: t.body },
+      };
+    } else if (cta.length) {
+      types = {
+        'twilio/call-to-action': {
+          body: t.body,
+          actions: cta.map((a) =>
+            a.type === 'URL' ? { type: 'URL', title: a.title, url: a.value } : { type: 'PHONE_NUMBER', title: a.title, phone: a.value },
+          ),
+        },
+        'twilio/text': { body: t.body },
+      };
+    } else {
+      types = { 'twilio/text': { body: t.body } };
+    }
+
+    const created = await contentApi('post', 'https://content.twilio.com/v1/Content', {
+      friendly_name: t.friendlyName,
+      language: t.language,
+      variables: Object.fromEntries(placeholders.map((k) => [k, t.variables[k]!])),
+      types,
+    });
+    const sid = String(created?.sid ?? '');
+    if (!sid) throw new ApiError(502, 'TWILIO_REJECTED', 'Twilio did not return the new template.');
+
+    let submitError: string | null = null;
+    if (t.submit) {
+      try {
+        await submitForApproval(sid, t.approvalName || t.friendlyName, t.category);
+      } catch (err) {
+        submitError = err instanceof Error ? err.message : 'Submit failed.';
+      }
+    }
+    await loadTemplates(true).catch(() => undefined);
+    emitEphemeral('library.changed', null, { kind: 'templates' });
+    res.status(201).json({ sid, submitted: t.submit && !submitError, submitError });
+  }),
+);
+
+async function submitForApproval(sid: string, name: string, category: string) {
+  await contentApi('post', `https://content.twilio.com/v1/Content/${encodeURIComponent(sid)}/ApprovalRequests/whatsapp`, {
+    name: toApprovalName(name),
+    category,
+  });
+}
+
+/** POST /api/templates/:sid/submit — send an existing template to Meta for approval. */
+templatesRouter.post(
+  '/:sid/submit',
+  asyncHandler(async (req, res) => {
+    const parsed = z
+      .object({
+        name: z.string().max(512).optional(),
+        category: z.enum(['UTILITY', 'MARKETING', 'AUTHENTICATION']).default('UTILITY'),
+      })
+      .safeParse(req.body ?? {});
+    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', 'Invalid category.');
+    const sid = req.params.sid!;
+    const t = (await loadTemplates()).find((x) => x.sid === sid);
+    await submitForApproval(sid, parsed.data.name || t?.friendlyName || sid, parsed.data.category);
+    await loadTemplates(true).catch(() => undefined);
+    emitEphemeral('library.changed', null, { kind: 'templates' });
+    res.json({ ok: true });
+  }),
+);
+
+/** DELETE /api/templates/:sid — delete from Twilio (and its WhatsApp approval). */
+templatesRouter.delete(
+  '/:sid',
+  asyncHandler(async (req, res) => {
+    await contentApi('delete', `https://content.twilio.com/v1/Content/${encodeURIComponent(req.params.sid!)}`);
+    await loadTemplates(true).catch(() => undefined);
+    emitEphemeral('library.changed', null, { kind: 'templates' });
+    res.json({ ok: true });
+  }),
+);
+
+// ===== Background watcher: tell the operator when Meta decides =====
+
+let watcher: NodeJS.Timeout | null = null;
+const lastStatus = new Map<string, string>();
+
+/**
+ * Every 10 minutes, re-read template statuses. When one changes (typically
+ * pending → approved / rejected) an ephemeral `template.status` ping is pushed
+ * so the UI can show a toast — no need to keep refreshing by hand.
+ */
+export function startTemplateWatcher(): void {
+  if (watcher) return;
+  const tick = async () => {
+    try {
+      const list = await loadTemplates(true);
+      for (const t of list) {
+        const prev = lastStatus.get(t.sid);
+        if (prev && prev !== t.status) {
+          emitEphemeral('template.status', null, {
+            sid: t.sid,
+            friendlyName: t.friendlyName,
+            from: prev,
+            to: t.status,
+            rejectionReason: t.rejectionReason,
+          });
+        }
+        lastStatus.set(t.sid, t.status);
+      }
+    } catch (err) {
+      logger.debug({ err }, 'template watcher tick failed');
+    }
+  };
+  setTimeout(() => void tick(), 15_000);
+  watcher = setInterval(() => void tick(), 10 * 60 * 1000);
+}

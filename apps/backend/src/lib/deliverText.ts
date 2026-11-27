@@ -103,6 +103,7 @@ export interface DeliverResult {
     body: string | null;
     sentAt: Date;
     replyTo: ReplySnippet | null;
+    origin: string | null;
   };
   replyTo: ReplySnippet | null;
 }
@@ -113,6 +114,8 @@ export async function deliverText(input: {
   clientId: string;
   replyToId?: string | null;
   userId?: string | null;
+  /** null = typed by the operator; 'ai' | 'away' | 'forward' | 'retry' otherwise. */
+  origin?: string | null;
 }): Promise<DeliverResult> {
   const { conv } = input;
 
@@ -175,6 +178,7 @@ export async function deliverText(input: {
         status: 'sent',
         body: input.body,
         replyToTwilioSid,
+        origin: input.origin ?? null,
         sentAt: now,
       },
     });
@@ -194,13 +198,14 @@ export async function deliverText(input: {
         body: m.body,
         sentAt: m.sentAt,
         replyTo: replyToSnippet,
+        origin: m.origin,
       },
     });
     return m;
   });
 
   await prisma.auditEvent.create({
-    data: { userId: input.userId ?? null, kind: 'message.sent', payload: { conversationId: conv.id } },
+    data: { userId: input.userId ?? null, kind: input.origin ? `message.sent.${input.origin}` : 'message.sent', payload: { conversationId: conv.id } },
   });
 
   return {
@@ -214,6 +219,7 @@ export async function deliverText(input: {
       body: message.body,
       sentAt: message.sentAt,
       replyTo: replyToSnippet,
+      origin: message.origin,
     },
     replyTo: replyToSnippet,
   };

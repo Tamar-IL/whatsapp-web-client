@@ -97,6 +97,7 @@ See `apps/backend/.env.example` for the full list with comments. Critical:
 - `SESSION_SECRET` — random 32+ bytes
 - `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH` — bootstrap user
 - `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_CONVERSATION_SERVICE_SID`, `TWILIO_WHATSAPP_SENDER`
+- `ANTHROPIC_API_KEY` *(optional)* — for the AI agent; can instead be pasted in Settings → AI agent
 
 ## Deployment (private server)
 
@@ -127,6 +128,44 @@ domain + HTTPS, email, backups, troubleshooting).
 - To actually change the password, run `npm run hash-password` and update
   `ADMIN_PASSWORD_HASH` in `.env` — the app resets the password from that value
   on every start.
+
+## Features
+
+Everything optional can be switched off in **Settings → Features** (⋮ menu at
+the top of the chat list); a switched-off feature disappears from the UI and
+nothing is deleted.
+
+- **Chat list** — contact photos (uploaded by you; WhatsApp does not share
+  customers' pictures through Twilio) with coloured initials as fallback,
+  last-message preview, pin chats, archive, mark as unread, labels with filter
+  chips, filters for Unread / Needs you / AI.
+- **In a chat** — pinned-messages bar, per-message menu (reply, copy, star,
+  pin, forward, retry failed), search across the whole history, time left in
+  the 24-hour window, export as text or print-ready PDF, contact panel with
+  name, email, notes, labels and opt-out.
+- **Voice messages** — 1× / 1.5× / 2× playback speed, default set in Settings.
+- **Writing** — saved replies with `/shortcut`, ✨ AI draft, schedule files as
+  well as text.
+- **Templates manager** — list with Meta status (approved / pending /
+  rejected + reason), filters, copy, duplicate, delete, create (text, quick
+  replies, link / call buttons) and submit for approval; a background watcher
+  announces when Meta decides.
+- **Bulk send** — one approved template to many chats with `{name}` /
+  `{first}` / `{phone}` tokens, label filter, live report, stop button.
+- **Away message** — automatic reply outside business hours (or always), with
+  a per-chat cooldown.
+- **AI agent (Claude)** — switched on per chat, with its own instructions and
+  “good to know” customer info; permanent or for a date range; any time /
+  only inside / only outside business hours; replies by itself or drafts for
+  you; daily cap; pauses after you reply by hand; hands the chat to you
+  (“Needs you”) when it lacks information. Global business info, house rules,
+  model and master switch in Settings → AI agent.
+- **WhatsApp profile** — name, photo, about, description, address, category,
+  email and website through Twilio's Senders API.
+- **Contacts** — CSV import / export.
+
+Reactions are shown when customers send them but cannot be sent: Twilio has no
+API for it.
 
 ## Status
 

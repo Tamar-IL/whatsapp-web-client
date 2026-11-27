@@ -54,8 +54,8 @@ export async function mediaExists(messageId: string): Promise<boolean> {
   }
 }
 
-export function signMediaToken(messageId: string): string {
-  const exp = Date.now() + TTL_MS;
+export function signMediaToken(messageId: string, ttlMs: number = TTL_MS): string {
+  const exp = Date.now() + ttlMs;
   const payload = `${messageId}.${exp}`;
   const sig = crypto.createHmac('sha256', env.SESSION_SECRET).update(payload).digest('base64url');
   return `${payload}.${sig}`;

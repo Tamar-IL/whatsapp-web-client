@@ -8,9 +8,10 @@ import { windowState, WindowClosedError } from '../lib/window';
 import { prisma } from '../db/prisma';
 import { withOutbox } from '../realtime/outbox';
 import { deliverText, DeliverError } from '../lib/deliverText';
-import { twilioClient } from '../twilio/client';
-import { saveMedia, signMediaToken, mimeToType } from '../lib/mediaStore';
-import { compressVideoToFit, SAFE_VIDEO_BYTES, VideoTooLargeError } from '../lib/videoTranscode';
+import { readMedia, mediaExists } from '../lib/mediaStore';
+import { deliverMedia, MediaDeliverError } from '../lib/deliverMedia';
+import { noteOperatorReply } from '../lib/serialize';
+import { emitEphemeral } from '../realtime/io';
 import {
   sendQuickReply,
   QuickReplyError,
@@ -19,7 +20,6 @@ import {
   MAX_BUTTON_CHARS,
 } from '../twilio/quickReply';
 import { env } from '../config/env';
-import { logger } from '../config/logger';
 
 export const messagesRouter = Router();
 
@@ -27,20 +27,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: env.MEDIA_MAX_BYTES },
 });
-
-/**
- * Base URL Twilio fetches outbound media from. We prefer a URL that bypasses
- * Cloudflare (which blocks Twilio's media bot -> error 63019):
- *   1. MEDIA_PUBLIC_BASE_URL if explicitly set
- *   2. the raw Railway domain (RAILWAY_PUBLIC_DOMAIN) — not proxied by Cloudflare
- *   3. PUBLIC_BASE_URL as a last resort
- */
-function mediaPublicBaseUrl(): string {
-  if (env.MEDIA_PUBLIC_BASE_URL) return env.MEDIA_PUBLIC_BASE_URL;
-  const railway = process.env.RAILWAY_PUBLIC_DOMAIN;
-  if (railway) return `https://${railway}`;
-  return env.PUBLIC_BASE_URL;
-}
 
 const sendTextSchema = z.object({
   conversationId: z.string().min(1),
@@ -89,6 +75,7 @@ messagesRouter.post(
       throw err;
     }
 
+    await noteOperatorReply(conv.id);
     res.json({ message: delivered.message });
   }),
 );
@@ -124,137 +111,31 @@ messagesRouter.post(
       throw new ApiError(409, 'WINDOW_CLOSED', new WindowClosedError().message);
     }
 
-    let mime = file.mimetype || 'application/octet-stream';
-    let buffer = file.buffer;
-    let originalName = file.originalname;
-    let mediaSize = file.size;
-    const type = mimeToType(mime);
-
-    // WhatsApp hard-rejects video > 16MB (Twilio error 11751). Auto-compress
-    // oversized video down to fit — just like the official WhatsApp app does —
-    // so the operator can send any clip without worrying about size.
-    if (type === 'video' && mediaSize > SAFE_VIDEO_BYTES) {
-      logger.info({ conversationId: conv.id, originalBytes: mediaSize }, 'compressing oversized video');
-      try {
-        const out = await compressVideoToFit(buffer, originalName);
-        buffer = out.buffer;
-        mime = out.mime;
-        originalName = out.filename;
-        mediaSize = out.buffer.length;
-        logger.info(
-          { conversationId: conv.id, originalBytes: file.size, compressedBytes: mediaSize },
-          'video compressed',
-        );
-      } catch (err) {
-        if (err instanceof VideoTooLargeError) {
-          throw new ApiError(
-            413,
-            'VIDEO_TOO_LARGE',
-            'This video is too long to compress under WhatsApp\'s 16 MB limit. Trim it shorter and try again.',
-          );
-        }
-        logger.error({ err, conversationId: conv.id }, 'video compression failed');
-        throw new ApiError(500, 'COMPRESSION_FAILED', 'Could not process this video. Try a different file.');
-      }
-    }
-
-    // Create the row first so we have an id to key the on-disk file by.
-    const draft = await prisma.message.create({
-      data: {
-        conversationId: conv.id,
-        twilioSid: `pending:${crypto.randomUUID()}`,
+    let message;
+    try {
+      message = await deliverMedia({
+        conv,
+        buffer: file.buffer,
+        mime: file.mimetype || 'application/octet-stream',
+        name: file.originalname,
+        caption,
         clientId,
-        direction: 'outbound',
-        type,
-        status: 'queued',
-        body: caption ?? null,
-        mediaMime: mime,
-        mediaName: originalName,
-        mediaSize,
-        mediaUrl: 'local:pending',
-        sentAt: new Date(),
-      },
-    });
-
-    try {
-      await saveMedia(draft.id, buffer);
+      });
     } catch (err) {
-      logger.error({ err, id: draft.id }, 'saveMedia failed');
-      await prisma.message.update({ where: { id: draft.id }, data: { status: 'failed' } });
-      throw new ApiError(500, 'STORAGE_FAILED', 'Could not store the file on the server.');
+      throw mediaErrorToApi(err);
     }
-    await prisma.message.update({ where: { id: draft.id }, data: { mediaUrl: `local:${draft.id}` } });
-
-    const publicUrl = `${mediaPublicBaseUrl()}/public/media/${signMediaToken(draft.id)}`;
-    const statusCallbackUrl = `${env.PUBLIC_BASE_URL}/webhooks/twilio/status`;
-    logger.info({ publicUrl, conversationId: conv.id }, 'Sending media via Twilio');
-
-    let sid: string;
-    try {
-      const sent = await twilioClient.messages.create({
-        from: env.TWILIO_WHATSAPP_SENDER,
-        to: `whatsapp:${conv.contact.phoneNumber}`,
-        mediaUrl: [publicUrl],
-        body: caption,
-        statusCallback: statusCallbackUrl,
-      });
-      sid = sent.sid;
-    } catch (err) {
-      const e = err as { code?: string | number; message?: string; status?: number };
-      logger.error({ err, conversationId: conv.id, publicUrl }, 'Twilio media send failed');
-      await prisma.message.update({
-        where: { id: draft.id },
-        data: { status: 'failed', errorCode: e.code ? String(e.code) : null, errorMessage: e.message ?? null },
-      });
-      // Surface the real reason so we can diagnose (Twilio code + message).
-      const friendly = twilioErrorMessage(e.code ? String(e.code) : undefined);
-      const detail = e.code ? ` [Twilio ${e.code}: ${e.message ?? ''}]` : e.message ? ` [${e.message}]` : '';
-      throw new ApiError(502, 'TWILIO_SEND_FAILED', `${friendly}${detail}`);
-    }
-
-    const message = await withOutbox(async (tx, emit) => {
-      const m = await tx.message.update({
-        where: { id: draft.id },
-        data: { twilioSid: sid, status: 'sent' },
-      });
-      await tx.conversation.update({ where: { id: conv.id }, data: { lastMessageAt: new Date() } });
-      await emit({
-        kind: 'message.added',
-        conversationId: conv.id,
-        payload: {
-          messageId: m.id,
-          clientId: m.clientId,
-          direction: 'outbound',
-          type: m.type,
-          status: m.status,
-          body: m.body,
-          sentAt: m.sentAt,
-          hasMedia: true,
-          mediaMime: m.mediaMime,
-          mediaName: m.mediaName,
-        },
-      });
-      return m;
-    });
-
-    res.json({
-      message: {
-        id: message.id,
-        clientId: message.clientId,
-        twilioSid: message.twilioSid,
-        direction: 'outbound',
-        type: message.type,
-        status: message.status,
-        body: message.body,
-        mediaUrl: `/api/media/${message.id}`,
-        mediaMime: message.mediaMime,
-        mediaName: message.mediaName,
-        hasMedia: true,
-        sentAt: message.sentAt,
-      },
-    });
+    await noteOperatorReply(conv.id);
+    res.json({ message });
   }),
 );
+
+function mediaErrorToApi(err: unknown): unknown {
+  if (err instanceof MediaDeliverError) {
+    const status = err.code === 'VIDEO_TOO_LARGE' ? 413 : err.code === 'TWILIO_SEND_FAILED' ? 502 : 500;
+    return new ApiError(status, err.code, err.message);
+  }
+  return err;
+}
 
 const sendButtonsSchema = z.object({
   conversationId: z.string().min(1),
@@ -359,6 +240,7 @@ messagesRouter.post(
       return m;
     });
 
+    await noteOperatorReply(conv.id);
     res.json({
       message: {
         id: message.id,
@@ -372,6 +254,178 @@ messagesRouter.post(
         sentAt: message.sentAt,
       },
     });
+  }),
+);
+
+
+/** GET /api/messages/starred — every starred message, newest star first. */
+messagesRouter.get(
+  '/starred',
+  asyncHandler(async (_req, res) => {
+    const rows = await prisma.message.findMany({
+      where: { isStarred: true },
+      orderBy: { starredAt: 'desc' },
+      take: 500,
+      include: { conversation: { include: { contact: true } } },
+    });
+    res.json({
+      starred: rows.map((m) => ({
+        id: m.id,
+        conversationId: m.conversationId,
+        contactName:
+          m.conversation.contact.displayName ?? m.conversation.contact.profileName ?? m.conversation.contact.phoneNumber,
+        body: m.body,
+        type: m.type,
+        direction: m.direction,
+        mediaName: m.mediaName,
+        hasMedia: Boolean(m.mediaUrl),
+        sentAt: m.sentAt,
+        starredAt: m.starredAt,
+      })),
+    });
+  }),
+);
+
+const flagSchema = z.object({
+  isPinned: z.boolean().optional(),
+  isStarred: z.boolean().optional(),
+});
+
+/** PATCH /api/messages/:id — pin / star a message. */
+messagesRouter.patch(
+  '/:id',
+  asyncHandler(async (req, res) => {
+    const parsed = flagSchema.safeParse(req.body);
+    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', 'Invalid update.');
+    const id = req.params.id!;
+    const msg = await prisma.message.findUnique({ where: { id }, select: { id: true, conversationId: true } });
+    if (!msg) throw new ApiError(404, 'NOT_FOUND', 'Message not found.');
+    const { isPinned, isStarred } = parsed.data;
+    const now = new Date();
+    const m = await withOutbox(async (tx, emit) => {
+      const row = await tx.message.update({
+        where: { id },
+        data: {
+          ...(isPinned !== undefined && { isPinned, pinnedAt: isPinned ? now : null }),
+          ...(isStarred !== undefined && { isStarred, starredAt: isStarred ? now : null }),
+        },
+      });
+      await emit({
+        kind: 'message.updated',
+        conversationId: msg.conversationId,
+        payload: { messageId: id, isPinned: row.isPinned, isStarred: row.isStarred },
+      });
+      return row;
+    });
+    res.json({ message: { id: m.id, isPinned: m.isPinned, isStarred: m.isStarred } });
+  }),
+);
+
+/**
+ * POST /api/messages/:id/forward — send a copy of a message to other chats.
+ *
+ * Text is re-sent as text; a file is re-sent from our stored copy. Each target
+ * is handled independently: a chat whose 24h window is closed is reported as
+ * skipped rather than failing the whole batch.
+ */
+messagesRouter.post(
+  '/:id/forward',
+  asyncHandler(async (req, res) => {
+    const parsed = z.object({ conversationIds: z.array(z.string()).min(1).max(50) }).safeParse(req.body);
+    if (!parsed.success) throw new ApiError(400, 'BAD_INPUT', 'Pick at least one chat.');
+    const src = await prisma.message.findUnique({ where: { id: req.params.id! } });
+    if (!src) throw new ApiError(404, 'NOT_FOUND', 'Message not found.');
+
+    let buffer: Buffer | null = null;
+    if (src.mediaUrl) {
+      if (!(await mediaExists(src.id))) {
+        throw new ApiError(410, 'GONE', 'This file is no longer stored on the server, so it cannot be forwarded.');
+      }
+      buffer = await readMedia(src.id);
+    } else if (!src.body?.trim()) {
+      throw new ApiError(400, 'NOTHING_TO_FORWARD', 'This message has no text or file to forward.');
+    }
+
+    const results: Array<{ conversationId: string; ok: boolean; error?: string }> = [];
+    for (const conversationId of parsed.data.conversationIds) {
+      const conv = await prisma.conversation.findUnique({ where: { id: conversationId }, include: { contact: true } });
+      if (!conv) {
+        results.push({ conversationId, ok: false, error: 'Chat not found.' });
+        continue;
+      }
+      if (!windowState(conv.lastInboundAt).open) {
+        results.push({ conversationId, ok: false, error: '24-hour window closed — only templates can be sent.' });
+        continue;
+      }
+      try {
+        if (buffer) {
+          await deliverMedia({
+            conv,
+            buffer,
+            mime: src.mediaMime ?? 'application/octet-stream',
+            name: src.mediaName ?? `${src.type}`,
+            caption: src.body,
+            origin: 'forward',
+          });
+        } else {
+          await deliverText({ conv, body: src.body!, clientId: `c_${crypto.randomUUID()}`, userId: req.session.userId ?? null, origin: 'forward' });
+        }
+        results.push({ conversationId, ok: true });
+      } catch (err) {
+        const msg =
+          err instanceof DeliverError ? twilioErrorMessage(err.twilioCode) : err instanceof Error ? err.message : 'Failed.';
+        results.push({ conversationId, ok: false, error: msg });
+      }
+    }
+    res.json({ results });
+  }),
+);
+
+/**
+ * POST /api/messages/:id/retry — resend a failed outbound message as a new
+ * message. The failed row stays in the history (it really did fail), marked so
+ * the UI stops offering a second retry.
+ */
+messagesRouter.post(
+  '/:id/retry',
+  asyncHandler(async (req, res) => {
+    const src = await prisma.message.findUnique({ where: { id: req.params.id! } });
+    if (!src) throw new ApiError(404, 'NOT_FOUND', 'Message not found.');
+    if (src.direction !== 'outbound' || src.status !== 'failed') {
+      throw new ApiError(409, 'NOT_FAILED', 'Only failed messages can be retried.');
+    }
+    const conv = await prisma.conversation.findUnique({ where: { id: src.conversationId }, include: { contact: true } });
+    if (!conv) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found.');
+    if (!windowState(conv.lastInboundAt).open) {
+      throw new ApiError(409, 'WINDOW_CLOSED', new WindowClosedError().message);
+    }
+
+    let message;
+    try {
+      if (src.mediaUrl) {
+        if (!(await mediaExists(src.id))) throw new ApiError(410, 'GONE', 'The file is no longer stored, so it cannot be resent.');
+        message = await deliverMedia({
+          conv,
+          buffer: await readMedia(src.id),
+          mime: src.mediaMime ?? 'application/octet-stream',
+          name: src.mediaName ?? src.type,
+          caption: src.body,
+          origin: src.origin,
+        });
+      } else {
+        if (!src.body) throw new ApiError(400, 'NOTHING_TO_RETRY', 'Nothing to resend.');
+        message = (
+          await deliverText({ conv, body: src.body, clientId: `c_${crypto.randomUUID()}`, userId: req.session.userId ?? null, origin: src.origin })
+        ).message;
+      }
+    } catch (err) {
+      if (err instanceof DeliverError) throw new ApiError(502, 'TWILIO_SEND_FAILED', twilioErrorMessage(err.twilioCode));
+      throw mediaErrorToApi(err);
+    }
+    // Retried: the old bubble no longer needs a retry button.
+    await prisma.message.update({ where: { id: src.id }, data: { errorMessage: 'retried' } });
+    emitEphemeral('message.retried', conv.id, { messageId: src.id, newMessageId: message.id });
+    res.json({ message });
   }),
 );
 

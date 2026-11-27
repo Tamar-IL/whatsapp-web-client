@@ -1,24 +1,71 @@
 /**
- * Chat list (Phase 3 ticket 3.6) with search.
- *
- * Fetches /api/conversations, re-fetches on realtime events, and filters the
- * list client-side by contact name / phone via the search box at the top.
+ * Chat list with search, filters (unread / needs you / label), archive view,
+ * avatars, last-message preview and a per-chat menu (pin, archive, unread,
+ * labels). Everything optional is behind a Settings → Features switch.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api } from '../api/client';
 import { useRealtime } from './RealtimeProvider';
+import { useAppData } from './AppData';
+import { Avatar } from './Avatar';
+import { Dropdown, Icons, Svg } from './ui';
+import { LabelPicker } from './LabelPicker';
 
-interface ConversationListItem {
+export interface ConversationListItem {
   id: string;
-  contact: { displayName: string | null; profileName: string | null; phoneNumber: string };
+  contact: {
+    id: string;
+    displayName: string | null;
+    profileName: string | null;
+    phoneNumber: string;
+    hasAvatar: boolean;
+    avatarVersion: string | null;
+    notes: string | null;
+  };
   lastMessageAt: string | null;
+  lastMessage: {
+    body: string | null;
+    type: string;
+    direction: string;
+    status: string;
+    origin: string | null;
+  } | null;
   unreadCount: number;
+  markedUnread: boolean;
+  isPinned: boolean;
+  isArchived: boolean;
+  needsHuman: boolean;
+  aiSuggestion: string | null;
+  ai: { enabled: boolean; activeNow: boolean; mode: string } | null;
+  labels: Array<{ id: string; name: string; color: string }>;
   window: { open: boolean; closesAt: string | null };
 }
 
-function displayName(c: ConversationListItem): string {
+export function displayName(c: { contact: ConversationListItem['contact'] }): string {
   return c.contact.displayName ?? c.contact.profileName ?? c.contact.phoneNumber;
 }
+
+const MEDIA_PREVIEW: Record<string, string> = {
+  image: '📷 Photo',
+  video: '🎥 Video',
+  audio: '🎤 Voice message',
+  voice: '🎤 Voice message',
+  document: '📄 Document',
+  location: '📍 Location',
+};
+
+function listTime(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const y = new Date(now);
+  y.setDate(now.getDate() - 1);
+  if (d.toDateString() === y.toDateString()) return 'Yesterday';
+  if (now.getTime() - d.getTime() < 6 * 86_400_000) return d.toLocaleDateString([], { weekday: 'short' });
+  return d.toLocaleDateString([], { day: 'numeric', month: 'numeric', year: '2-digit' });
+}
+
+type Filter = 'all' | 'unread' | 'needs' | 'ai';
 
 export function ChatList({
   selectedId,
@@ -28,6 +75,10 @@ export function ChatList({
   onSelect: (id: string) => void;
 }) {
   const [items, setItems] = useState<ConversationListItem[] | null>(null);
+  const [archivedCount, setArchivedCount] = useState(0);
+  const [showArchived, setShowArchived] = useState(false);
+  const [filter, setFilter] = useState<Filter>('all');
+  const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [showNew, setShowNew] = useState(false);
@@ -35,10 +86,10 @@ export function ChatList({
   const [newName, setNewName] = useState('');
   const [creating, setCreating] = useState(false);
   const [newError, setNewError] = useState<string | null>(null);
-  // Read from the server rather than hardcoded, so the hint can never disagree
-  // with the DEFAULT_COUNTRY_CODE the backend actually applies.
+  const [labelsFor, setLabelsFor] = useState<ConversationListItem | null>(null);
   const [countryCode, setCountryCode] = useState('972');
   const { socket } = useRealtime();
+  const { features, labels, toast } = useAppData();
 
   useEffect(() => {
     api<{ config?: { defaultCountryCode?: string } }>('/api/auth/me')
@@ -49,37 +100,73 @@ export function ChatList({
   }, []);
 
   const load = useCallback(() => {
-    api<{ conversations: ConversationListItem[] }>('/api/conversations')
-      .then((r) => setItems(r.conversations))
+    api<{ conversations: ConversationListItem[]; archivedCount: number }>(
+      `/api/conversations${showArchived ? '?archived=1' : ''}`,
+    )
+      .then((r) => {
+        setItems(r.conversations);
+        if (!showArchived) setArchivedCount(r.archivedCount);
+        setError(null);
+      })
       .catch((e) => setError(e.message ?? 'Could not load conversations.'));
-  }, []);
+  }, [showArchived]);
 
   useEffect(() => {
+    setItems(null);
     load();
   }, [load]);
 
+  // Coalesce bursts of realtime events into one reload.
   useEffect(() => {
     if (!socket) return;
-    const handler = () => load();
+    let t: number | undefined;
+    const handler = () => {
+      window.clearTimeout(t);
+      t = window.setTimeout(load, 150);
+    };
     socket.on('message.added', handler);
     socket.on('conversation.added', handler);
     socket.on('conversation.updated', handler);
     return () => {
+      window.clearTimeout(t);
       socket.off('message.added', handler);
       socket.off('conversation.added', handler);
       socket.off('conversation.updated', handler);
     };
   }, [socket, load]);
 
+  // If the filtered-by label is deleted or labels are switched off, drop the filter.
+  useEffect(() => {
+    if (labelFilter && (!features.labels || !labels.some((l) => l.id === labelFilter))) setLabelFilter(null);
+  }, [labelFilter, labels, features.labels]);
+
   const filtered = useMemo(() => {
     if (!items) return null;
     const q = query.trim().toLowerCase();
-    if (!q) return items;
     return items.filter((c) => {
-      const name = displayName(c).toLowerCase();
-      return name.includes(q) || c.contact.phoneNumber.toLowerCase().includes(q);
+      if (filter === 'unread' && !(c.unreadCount > 0 || c.markedUnread)) return false;
+      if (filter === 'needs' && !c.needsHuman && !c.aiSuggestion) return false;
+      if (filter === 'ai' && !c.ai?.enabled) return false;
+      if (labelFilter && !c.labels.some((l) => l.id === labelFilter)) return false;
+      if (!q) return true;
+      return (
+        displayName(c).toLowerCase().includes(q) ||
+        c.contact.phoneNumber.toLowerCase().includes(q) ||
+        (c.contact.notes ?? '').toLowerCase().includes(q) ||
+        c.labels.some((l) => l.name.toLowerCase().includes(q))
+      );
     });
-  }, [items, query]);
+  }, [items, query, filter, labelFilter]);
+
+  async function patch(c: ConversationListItem, body: Record<string, boolean>, msg?: string) {
+    try {
+      await api(`/api/conversations/${c.id}`, { method: 'PATCH', body });
+      load();
+      if (msg) toast(msg, 'ok', body.isArchived ? { label: 'Undo', onClick: () => void patch(c, { isArchived: false }) } : undefined);
+    } catch (e) {
+      toast((e as Error).message || 'Could not update the chat.', 'error');
+    }
+  }
 
   async function createChat(e: React.FormEvent) {
     e.preventDefault();
@@ -94,9 +181,8 @@ export function ChatList({
       setShowNew(false);
       setNewPhone('');
       setNewName('');
+      setShowArchived(false);
       load();
-      // Opening the chat lands the operator on the template-only bar, which is
-      // the only thing they can do with a contact who has never written.
       onSelect(r.conversation.id);
     } catch (err) {
       setNewError((err as Error)?.message ?? 'Could not start the chat.');
@@ -104,6 +190,13 @@ export function ChatList({
       setCreating(false);
     }
   }
+
+  const filters: Array<{ key: Filter; label: string; show: boolean }> = [
+    { key: 'all', label: 'All', show: true },
+    { key: 'unread', label: 'Unread', show: true },
+    { key: 'needs', label: 'Needs you', show: features.aiAgent },
+    { key: 'ai', label: 'AI', show: features.aiAgent },
+  ];
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -134,8 +227,6 @@ export function ChatList({
                          text-ink placeholder:text-ink-muted
                          focus:border-brand-primary focus:outline-none"
             />
-            {/* The country code is optional, not absent — spell that out, or a
-                number for another country looks impossible to enter. */}
             <p className="px-2 text-[11px] leading-tight text-ink-muted">
               Type the full number with its country code (+972, +1, +44…). A number starting with 0
               is treated as local (+{countryCode}).
@@ -176,13 +267,11 @@ export function ChatList({
       {/* Search */}
       <div className="border-b border-gray-200 p-2">
         <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-1.5">
-          <svg viewBox="0 0 24 24" className="h-4 w-4 fill-ink-muted">
-            <path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 10-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 119.5 5a4.5 4.5 0 010 9z" />
-          </svg>
+          <Svg d={Icons.search} className="h-4 w-4 text-ink-muted" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name or number"
+            placeholder="Search name, number, notes, label"
             className="flex-1 bg-transparent text-sm focus:outline-none"
           />
           {query && (
@@ -191,10 +280,50 @@ export function ChatList({
             </button>
           )}
         </div>
+
+        {/* Filter chips */}
+        {!showArchived && (
+          <div className="scroll-thin mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
+            {filters
+              .filter((f) => f.show)
+              .map((f) => (
+                <Chip key={f.key} active={filter === f.key && !labelFilter} onClick={() => { setFilter(f.key); setLabelFilter(null); }}>
+                  {f.label}
+                </Chip>
+              ))}
+            {features.labels &&
+              labels.map((l) => (
+                <Chip
+                  key={l.id}
+                  active={labelFilter === l.id}
+                  onClick={() => {
+                    setFilter('all');
+                    setLabelFilter((cur) => (cur === l.id ? null : l.id));
+                  }}
+                >
+                  <span className="mr-1 inline-block h-2 w-2 rounded-full" style={{ backgroundColor: l.color }} />
+                  {l.name}
+                </Chip>
+              ))}
+          </div>
+        )}
       </div>
 
+      {/* Archive row / back */}
+      {features.archive && (showArchived || archivedCount > 0) && (
+        <button
+          type="button"
+          onClick={() => setShowArchived((v) => !v)}
+          className="flex items-center gap-4 border-b border-gray-100 px-5 py-2.5 text-sm text-ink hover:bg-gray-50"
+        >
+          <Svg d={showArchived ? Icons.back : Icons.archive} className="h-5 w-5 text-brand-link" />
+          <span className="flex-1 text-left font-medium">{showArchived ? 'Back to chats' : 'Archived'}</span>
+          {!showArchived && <span className="text-xs font-medium text-brand-link">{archivedCount}</span>}
+        </button>
+      )}
+
       {/* List */}
-      <div className="scroll-thin flex-1 overflow-y-auto">
+      <div className="scroll-thin flex-1 overflow-y-auto overflow-x-hidden">
         {error && <div className="p-4 text-sm text-red-700">{error}</div>}
 
         {!error && !items && (
@@ -207,47 +336,199 @@ export function ChatList({
 
         {!error && items && items.length === 0 && (
           <div className="flex h-full items-center justify-center p-8 text-center text-sm text-ink-muted">
-            No conversations yet. When customers message your WhatsApp Business number, they will
-            appear here.
+            {showArchived
+              ? 'No archived chats.'
+              : 'No conversations yet. When customers message your WhatsApp Business number, they will appear here.'}
           </div>
         )}
 
         {!error && filtered && items && items.length > 0 && filtered.length === 0 && (
-          <div className="p-6 text-center text-sm text-ink-muted">No chats match “{query}”.</div>
+          <div className="p-6 text-center text-sm text-ink-muted">
+            {query ? `No chats match “${query}”.` : 'No chats in this filter.'}
+          </div>
         )}
 
         {!error && filtered && filtered.length > 0 && (
           <ul>
             {filtered.map((c) => (
-              <li
+              <ChatRow
                 key={c.id}
-                onClick={() => onSelect(c.id)}
-                className={
-                  'cursor-pointer border-b border-gray-100 px-4 py-3 hover:bg-gray-50 ' +
-                  (selectedId === c.id ? 'bg-gray-100' : '')
-                }
-              >
-                <div className="flex items-baseline justify-between">
-                  <span className="truncate font-medium text-ink">{displayName(c)}</span>
-                  {c.lastMessageAt && (
-                    <span className="ml-2 shrink-0 text-xs text-ink-muted">
-                      {new Date(c.lastMessageAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center justify-between text-sm text-ink-muted">
-                  <span className="truncate">{c.window.open ? '24h window open' : 'Template required'}</span>
-                  {c.unreadCount > 0 && (
-                    <span className="ml-2 shrink-0 rounded-full bg-brand-action px-2 text-xs font-semibold text-white">
-                      {c.unreadCount}
-                    </span>
-                  )}
-                </div>
-              </li>
+                c={c}
+                selected={selectedId === c.id}
+                onSelect={() => onSelect(c.id)}
+                onPatch={patch}
+                onLabels={() => setLabelsFor(c)}
+              />
             ))}
           </ul>
         )}
       </div>
+
+      {labelsFor && (
+        <LabelPicker
+          conversationId={labelsFor.id}
+          selected={labelsFor.labels.map((l) => l.id)}
+          onClose={() => setLabelsFor(null)}
+          onSaved={load}
+        />
+      )}
     </div>
+  );
+}
+
+function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        'flex shrink-0 items-center whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium transition ' +
+        (active ? 'bg-brand-action/20 text-brand-primary' : 'bg-white text-ink-muted hover:bg-black/5')
+      }
+    >
+      {children}
+    </button>
+  );
+}
+
+function ChatRow({
+  c,
+  selected,
+  onSelect,
+  onPatch,
+  onLabels,
+}: {
+  c: ConversationListItem;
+  selected: boolean;
+  onSelect: () => void;
+  onPatch: (c: ConversationListItem, body: Record<string, boolean>, msg?: string) => void;
+  onLabels: () => void;
+}) {
+  const { features } = useAppData();
+  const name = displayName(c);
+  const unread = c.unreadCount > 0 || c.markedUnread;
+  const last = c.lastMessage;
+  const preview = (() => {
+    if (!features.lastMessagePreview || !last) return c.window.open ? '24h window open' : 'Template required';
+    const text = last.body?.replace(/\s+/g, ' ').trim() || MEDIA_PREVIEW[last.type] || `[${last.type}]`;
+    return text;
+  })();
+  const originTag =
+    last?.direction === 'outbound' && last.origin === 'ai' ? '🤖 ' : last?.origin === 'away' ? '🌙 ' : last?.origin === 'bulk' ? '📣 ' : '';
+
+  return (
+    <li
+      onClick={onSelect}
+      className={
+        'group flex cursor-pointer items-center gap-3 border-b border-gray-100 px-3 py-2.5 hover:bg-gray-50 ' +
+        (selected ? 'bg-gray-100' : '')
+      }
+    >
+      <Avatar
+        contactId={c.contact.id}
+        name={name}
+        phone={c.contact.phoneNumber}
+        hasPhoto={c.contact.hasAvatar}
+        version={c.contact.avatarVersion}
+        size={46}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <span className={'truncate text-ink ' + (unread ? 'font-semibold' : 'font-medium')}>{name}</span>
+          {c.lastMessageAt && (
+            <span className={'shrink-0 text-xs ' + (unread ? 'font-medium text-brand-action' : 'text-ink-muted')}>
+              {listTime(c.lastMessageAt)}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-2 text-sm text-ink-muted">
+          <span className="flex min-w-0 items-center gap-1 truncate">
+            {features.lastMessagePreview && last?.direction === 'outbound' && (
+              <span className={'shrink-0 text-xs ' + (last.status === 'read' ? 'text-check-read' : last.status === 'failed' ? 'text-red-500' : '')}>
+                {last.status === 'failed' ? '⚠' : last.status === 'read' || last.status === 'delivered' ? '✓✓' : '✓'}
+              </span>
+            )}
+            <span className="truncate">
+              {originTag}
+              {preview}
+            </span>
+          </span>
+          <span className="flex shrink-0 items-center gap-1.5">
+            {features.aiAgent && c.needsHuman && (
+              <span className="rounded-full bg-red-100 px-1.5 text-[10px] font-semibold text-red-700" title="The AI agent handed this chat to you">
+                Needs you
+              </span>
+            )}
+            {features.aiAgent && !c.needsHuman && c.aiSuggestion && (
+              <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-semibold text-amber-800" title="An AI draft is waiting for you">
+                Draft
+              </span>
+            )}
+            {features.aiAgent && c.ai?.enabled && (
+              <span title={c.ai.activeNow ? `AI agent on (${c.ai.mode === 'auto' ? 'auto-reply' : 'drafts'})` : 'AI agent set up, outside its active dates'} className={c.ai.activeNow ? '' : 'opacity-40'}>
+                <Svg d={Icons.robot} className="h-4 w-4 text-brand-link" />
+              </span>
+            )}
+            {features.pinChats && c.isPinned && <Svg d={Icons.pin} className="h-4 w-4 rotate-45 text-ink-muted" />}
+            {c.unreadCount > 0 ? (
+              <span className="rounded-full bg-brand-action px-1.5 text-xs font-semibold text-white">{c.unreadCount}</span>
+            ) : c.markedUnread ? (
+              <span className="h-3 w-3 rounded-full bg-brand-action" title="Marked as unread" />
+            ) : null}
+            <Dropdown
+              className="w-5 opacity-0 transition group-hover:opacity-100 data-[open=true]:opacity-100"
+              trigger={
+                <span className="block text-ink-muted hover:text-ink" title="Chat options">
+                  <Svg d={Icons.chevron} className="h-5 w-5" />
+                </span>
+              }
+              items={[
+                {
+                  label: c.isPinned ? 'Unpin chat' : 'Pin chat',
+                  icon: '📌',
+                  hidden: !features.pinChats || c.isArchived,
+                  onClick: () => onPatch(c, { isPinned: !c.isPinned }),
+                },
+                {
+                  label: c.isArchived ? 'Unarchive chat' : 'Archive chat',
+                  icon: '🗄',
+                  hidden: !features.archive,
+                  onClick: () => onPatch(c, { isArchived: !c.isArchived }, c.isArchived ? 'Chat unarchived' : 'Chat archived'),
+                },
+                {
+                  label: unread ? 'Mark as read' : 'Mark as unread',
+                  icon: '●',
+                  hidden: !features.markUnread,
+                  onClick: () =>
+                    unread
+                      ? void api(`/api/conversations/${c.id}/read`, { method: 'POST' }).then(() => onPatch(c, { markedUnread: false }))
+                      : onPatch(c, { markedUnread: true }),
+                },
+                { label: 'Labels…', icon: '🏷', hidden: !features.labels, onClick: onLabels },
+                {
+                  label: 'Clear “needs you”',
+                  icon: '✓',
+                  hidden: !features.aiAgent || !c.needsHuman,
+                  onClick: () => onPatch(c, { needsHuman: false }),
+                },
+              ]}
+            />
+          </span>
+        </div>
+        {features.labels && c.labels.length > 0 && (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {c.labels.map((l) => (
+              <span
+                key={l.id}
+                className="rounded px-1.5 py-px text-[10px] font-medium text-white"
+                style={{ backgroundColor: l.color }}
+              >
+                {l.name}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+    </li>
   );
 }

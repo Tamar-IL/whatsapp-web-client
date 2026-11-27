@@ -4,6 +4,8 @@ import { windowState } from '../lib/window';
 import { deliverText, DeliverError } from '../lib/deliverText';
 import { twilioErrorMessage } from '../lib/errors';
 import { emitEphemeral } from '../realtime/io';
+import { deliverMedia, MediaDeliverError } from '../lib/deliverMedia';
+import { mediaExists, readMedia } from '../lib/mediaStore';
 
 /**
  * In-process scheduled-message worker.
@@ -79,6 +81,8 @@ async function fire(row: {
   replyToId: string | null;
   clientId: string;
   createdById: string | null;
+  mediaMime: string | null;
+  mediaName: string | null;
 }): Promise<void> {
   const conv = await prisma.conversation.findUnique({
     where: { id: row.conversationId },
@@ -100,13 +104,33 @@ async function fire(row: {
   }
 
   try {
-    const delivered = await deliverText({
-      conv,
-      body: row.body,
-      clientId: row.clientId,
-      replyToId: row.replyToId,
-      userId: row.createdById,
-    });
+    let sentId: string;
+    if (row.mediaMime) {
+      const key = `sched-${row.id}`;
+      if (!(await mediaExists(key))) {
+        await markFailed(row, 'The scheduled file was lost on the server (restart?). Attach it again.');
+        return;
+      }
+      const m = await deliverMedia({
+        conv,
+        buffer: await readMedia(key),
+        mime: row.mediaMime,
+        name: row.mediaName ?? 'file',
+        caption: row.body || null,
+        clientId: row.clientId,
+      });
+      sentId = m.id;
+    } else {
+      const d = await deliverText({
+        conv,
+        body: row.body,
+        clientId: row.clientId,
+        replyToId: row.replyToId,
+        userId: row.createdById,
+      });
+      sentId = d.message.id;
+    }
+    const delivered = { message: { id: sentId } };
 
     await prisma.scheduledMessage.update({
       where: { id: row.id },
@@ -124,7 +148,9 @@ async function fire(row: {
     const reason =
       err instanceof DeliverError
         ? twilioErrorMessage(err.twilioCode)
-        : 'Sending failed unexpectedly. Try resending.';
+        : err instanceof MediaDeliverError
+          ? err.message
+          : 'Sending failed unexpectedly. Try resending.';
     await markFailed(row, reason);
     logger.error({ err, scheduledId: row.id }, 'scheduled message failed');
   }

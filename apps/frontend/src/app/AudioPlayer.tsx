@@ -4,8 +4,12 @@
  * Custom controls (circular play/pause, a progress track, elapsed/total time)
  * instead of the browser's default <audio controls>, to match the WhatsApp look.
  */
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EmailMediaButton } from './EmailMediaButton';
+import { useAppData } from './AppData';
+
+/** Speeds the 1×/1.5×/2× pill cycles through, like WhatsApp. */
+const SPEEDS = [1, 1.5, 2];
 
 function fmt(seconds: number): string {
   if (!isFinite(seconds) || seconds < 0) return '0:00';
@@ -27,6 +31,25 @@ export function AudioPlayer({
   const [playing, setPlaying] = useState(false);
   const [current, setCurrent] = useState(0);
   const [duration, setDuration] = useState(0);
+  const { settings, features } = useAppData();
+  const defaultSpeed = settings?.audio.defaultSpeed ?? 1;
+  const [speed, setSpeed] = useState(defaultSpeed);
+
+  // Follow the default from Settings until the operator picks a speed here.
+  const touched = useRef(false);
+  useEffect(() => {
+    if (!touched.current) setSpeed(defaultSpeed);
+  }, [defaultSpeed]);
+
+  // playbackRate resets when the element reloads its source, so re-apply it.
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = speed;
+  }, [speed]);
+
+  function cycleSpeed() {
+    touched.current = true;
+    setSpeed((s) => SPEEDS[(SPEEDS.indexOf(s) + 1) % SPEEDS.length] ?? 1);
+  }
 
   function toggle() {
     const a = audioRef.current;
@@ -60,6 +83,20 @@ export function AudioPlayer({
         )}
       </button>
 
+      {features.playbackSpeed && (
+        <button
+          type="button"
+          onClick={cycleSpeed}
+          title="Playback speed"
+          className={
+            'shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums transition ' +
+            (speed !== 1 ? 'bg-brand-link text-white' : 'bg-black/10 text-ink-muted hover:bg-black/15')
+          }
+        >
+          {speed}×
+        </button>
+      )}
+
       <div className="flex min-w-[140px] flex-1 flex-col">
         <input
           type="range"
@@ -90,7 +127,11 @@ export function AudioPlayer({
           setCurrent(0);
         }}
         onTimeUpdate={(e) => setCurrent((e.target as HTMLAudioElement).currentTime)}
-        onLoadedMetadata={(e) => setDuration((e.target as HTMLAudioElement).duration)}
+        onLoadedMetadata={(e) => {
+          const a = e.target as HTMLAudioElement;
+          setDuration(a.duration);
+          a.playbackRate = speed;
+        }}
         onError={onError}
       />
     </div>

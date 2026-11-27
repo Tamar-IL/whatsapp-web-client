@@ -19,6 +19,7 @@ interface Scheduled {
   scheduledFor: string;
   status: string;
   errorMessage?: string | null;
+  mediaName?: string | null;
 }
 
 /** Format a Date for a datetime-local input (local time, no timezone suffix). */
@@ -179,7 +180,11 @@ export function ScheduledBar({ conversationId }: { conversationId: string }) {
                       {failed ? 'Failed to send' : `Scheduled · ${formatWhen(it.scheduledFor)}`}
                     </div>
                     <div className="truncate text-ink-muted">
-                      {failed && it.errorMessage ? it.errorMessage : it.body}
+                      {failed && it.errorMessage
+                        ? it.errorMessage
+                        : it.mediaName
+                          ? `📎 ${it.mediaName}${it.body ? ` — ${it.body}` : ''}`
+                          : it.body}
                     </div>
                   </div>
                   {!failed && (

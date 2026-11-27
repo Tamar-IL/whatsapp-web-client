@@ -8,6 +8,9 @@
  * press Send/Enter (optionally with the text as a caption). A × removes the stage.
  * Buttons: the 🔘 button attaches up to 3 quick-reply chips to the typed text.
  * 24h window closed → server returns 409 WINDOW_CLOSED → show template notice.
+ * Saved replies: typing "/" at the start of a word opens the saved-reply picker.
+ * ✨ asks the AI agent to draft a reply into the box (nothing is sent).
+ * A staged file can be scheduled too (when "Schedule files" is on).
  */
 import {
   type ChangeEvent,
@@ -21,6 +24,8 @@ import { api, apiUpload, ApiError } from '../api/client';
 import { TemplateModal } from './TemplateModal';
 import { RichText } from '../lib/richText';
 import type { ChatMessage } from './ConversationView';
+import { useAppData } from './AppData';
+import { Icons, Svg } from './ui';
 
 /**
  * Emoji offered by the picker, in the order they appear.
@@ -91,6 +96,7 @@ export function InputBar({
   setWindowOpen,
   replyingTo,
   onCancelReply,
+  inject,
 }: {
   conversationId: string;
   windowOpen: boolean;
@@ -98,7 +104,10 @@ export function InputBar({
   setWindowOpen: (open: boolean) => void;
   replyingTo: ChatMessage | null;
   onCancelReply: () => void;
+  /** Text pushed in from outside (e.g. "Edit" on an AI draft). */
+  inject?: { text: string; nonce: number } | null;
 }) {
+  const { features, savedReplies, toast } = useAppData();
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -112,8 +121,80 @@ export function InputBar({
   const [showButtons, setShowButtons] = useState(false);
   const [buttonLabels, setButtonLabels] = useState<string[]>(['']);
   const [sendingButtons, setSendingButtons] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [slashIdx, setSlashIdx] = useState(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!inject) return;
+    setText(inject.text);
+    requestAnimationFrame(() => {
+      autoGrow();
+      taRef.current?.focus();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inject?.nonce]);
+
+  /**
+   * The "/word" being typed right before the caret, if any. Only a "/" at the
+   * very start or after whitespace counts, so URLs and dates don't trigger it.
+   */
+  const slash = (() => {
+    if (!features.savedReplies || !savedReplies.length) return null;
+    const ta = taRef.current;
+    const caret = ta?.selectionStart ?? text.length;
+    const before = text.slice(0, caret);
+    const m = before.match(/(^|\s)\/([\p{L}\p{N}_-]*)$/u);
+    if (!m) return null;
+    const term = m[2]!.toLowerCase();
+    const matches = savedReplies.filter(
+      (r) => r.shortcut.toLowerCase().startsWith(term) || (term.length > 1 && r.body.toLowerCase().includes(term)),
+    );
+    return matches.length ? { start: caret - term.length - 1, end: caret, matches } : null;
+  })();
+
+  useEffect(() => setSlashIdx(0), [slash?.matches.length]);
+
+  function applySaved(body: string) {
+    if (!slash) return;
+    const next = text.slice(0, slash.start) + body + text.slice(slash.end);
+    onChangeText(next);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (!ta) return;
+      ta.focus();
+      const pos = slash.start + body.length;
+      ta.setSelectionRange(pos, pos);
+    });
+  }
+
+  async function aiDraft() {
+    if (drafting) return;
+    setDrafting(true);
+    setError(null);
+    try {
+      const r = await api<{ decision: { action: string; reply: string; reason: string } }>(
+        `/api/ai/chats/${conversationId}/draft`,
+        { method: 'POST', body: text.trim() ? { instruction: `The operator started typing: "${text.trim()}". Write the full message in that spirit.` } : {} },
+      );
+      if (r.decision.reply) {
+        onChangeText(r.decision.reply);
+        requestAnimationFrame(() => taRef.current?.focus());
+      } else {
+        toast(
+          r.decision.action === 'handoff'
+            ? `The AI suggests you answer yourself: ${r.decision.reason}`
+            : `The AI thinks no reply is needed${r.decision.reason ? `: ${r.decision.reason}` : '.'}`,
+          'info',
+        );
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The AI could not write a draft.');
+    } finally {
+      setDrafting(false);
+    }
+  }
 
   // Close the emoji picker on Escape or a click outside it. Clicks inside any
   // emoji UI are ignored so the toggle button still works — otherwise mousedown
@@ -279,13 +360,34 @@ export function InputBar({
 
   async function schedule(when: Date) {
     const body = text.trim();
-    if (!body || scheduling) return;
+    if ((!body && !staged) || scheduling) return;
     if (when.getTime() <= Date.now() + 30 * 1000) {
       setError('Pick a time at least a minute from now.');
       return;
     }
     setScheduling(true);
     setError(null);
+    if (staged) {
+      try {
+        const form = new FormData();
+        form.append('file', staged);
+        form.append('conversationId', conversationId);
+        form.append('scheduledFor', when.toISOString());
+        form.append('clientId', newClientId());
+        if (body) form.append('caption', body);
+        await apiUpload('/api/scheduled/media', form);
+        setText('');
+        resetHeight();
+        clearStaged();
+        setShowSchedule(false);
+        setCustomWhen('');
+      } catch (err) {
+        handleApiError(err, 'Could not schedule the file. Please try again.');
+      } finally {
+        setScheduling(false);
+      }
+      return;
+    }
     try {
       // The server emits a `scheduled.added` event that the scheduled-message
       // bar picks up, so we don't need to thread the result back up here.
@@ -386,7 +488,7 @@ export function InputBar({
   }
 
   function openScheduler() {
-    if (!text.trim()) {
+    if (!text.trim() && !staged) {
       setError('Type a message first, then schedule it.');
       return;
     }
@@ -446,6 +548,21 @@ export function InputBar({
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // Saved-reply picker navigation.
+    if (slash) {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const n = slash.matches.length;
+        setSlashIdx((i) => (i + (e.key === 'ArrowDown' ? 1 : n - 1)) % n);
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const pick = slash.matches[slashIdx] ?? slash.matches[0];
+        if (pick) applySaved(pick.body);
+        return;
+      }
+    }
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const key = e.key.toLowerCase();
       const marker =
@@ -632,6 +749,30 @@ export function InputBar({
         </div>
       )}
 
+      {/* Saved replies ("/" shortcut) */}
+      {slash && (
+        <div className="absolute bottom-full left-4 right-4 z-20 mb-2 flex justify-center">
+          <div className="scroll-thin max-h-64 w-full max-w-lg overflow-y-auto rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+            <div className="px-3 py-1 text-[11px] font-medium text-ink-muted">Saved replies · ↑↓ to choose, Enter to insert</div>
+            {slash.matches.map((r, i) => (
+              <button
+                key={r.id}
+                type="button"
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  applySaved(r.body);
+                }}
+                onMouseEnter={() => setSlashIdx(i)}
+                className={'block w-full px-3 py-1.5 text-left ' + (i === slashIdx ? 'bg-brand-action/10' : 'hover:bg-black/5')}
+              >
+                <span className="text-sm font-medium text-brand-primary">/{r.shortcut}</span>
+                <span className="ml-2 line-clamp-1 text-xs text-ink-muted">{r.body}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Emoji picker. Inserts into the text — the message then sends as any
           other text message, with no special handling. */}
       {showEmoji && (
@@ -768,8 +909,8 @@ export function InputBar({
           >
             📎
           </button>
-          {/* Schedule send — text only (a staged file is sent immediately) */}
-          {!staged && (
+          {/* Schedule send — text, and files too when "Schedule files" is on */}
+          {(!staged || features.scheduleMedia) && (
             <button
               type="button"
               title="Schedule message"
@@ -838,13 +979,28 @@ export function InputBar({
               <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm-1 7V3.5L18.5 9H13zM8 13h8v1.5H8V13zm0 3.5h8V18H8v-1.5z" />
             </svg>
           </button>
+          {features.aiAgent && !staged && (
+            <button
+              type="button"
+              title="✨ Let the AI write a reply (you review it before sending)"
+              aria-label="AI draft"
+              onClick={() => void aiDraft()}
+              disabled={sending || drafting}
+              className={
+                'shrink-0 leading-none transition disabled:opacity-50 ' +
+                (drafting ? 'animate-pulse text-amber-500' : 'text-ink-muted hover:text-amber-600')
+              }
+            >
+              <Svg d={Icons.sparkle} />
+            </button>
+          )}
           <textarea
             ref={taRef}
             value={text}
             onChange={(e) => onChangeText(e.target.value)}
             onKeyDown={onKeyDown}
             rows={1}
-            placeholder={staged ? 'Add a caption (optional)' : 'Type a message'}
+            placeholder={staged ? 'Add a caption (optional)' : features.savedReplies && savedReplies.length ? 'Type a message — “/” for saved replies' : 'Type a message'}
             title="Ctrl+B bold · Ctrl+I italic · Ctrl+Shift+X strikethrough · Ctrl+Shift+M monospace"
             className="max-h-40 flex-1 resize-none bg-transparent text-sm leading-6 focus:outline-none"
           />

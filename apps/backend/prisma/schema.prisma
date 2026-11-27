@@ -55,6 +55,9 @@ model Contact {
   profileName  String?
   avatarUrl    String?
   optOut       Boolean  @default(false) // §2.5 of spec
+  notes        String?  // operator notes about this customer
+  email        String?
+  avatarFile   String?  // storage key of an operator-uploaded photo
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -72,12 +75,21 @@ model Conversation {
   unreadCount           Int       @default(0)
   isArchived            Boolean   @default(false)
   isPinned              Boolean   @default(false)
+  markedUnread          Boolean   @default(false)
+  lastAwaySentAt        DateTime? // away-message rate limit
+  aiPausedUntil         DateTime? // AI agent paused (e.g. operator replied manually)
+  needsHuman            Boolean   @default(false) // AI handed the chat over to the operator
+  aiSuggestion          String?   // latest AI draft (suggest mode)
+  aiSuggestionAt        DateTime?
   createdAt             DateTime  @default(now())
   updatedAt             DateTime  @updatedAt
 
   contact           Contact            @relation(fields: [contactId], references: [id])
   messages          Message[]
   scheduledMessages ScheduledMessage[]
+  labels            ConversationLabel[]
+  aiConfig          AiChatConfig?
+  bulkRecipients    BulkRecipient[]
 
   @@index([lastMessageAt(sort: Desc)])
   @@index([isPinned, lastMessageAt(sort: Desc)])
@@ -150,6 +162,13 @@ model Message {
   // only echoes back the Content SID, not the rendered actions.
   buttons Json?
 
+  isPinned  Boolean   @default(false)
+  pinnedAt  DateTime?
+  isStarred Boolean   @default(false)
+  starredAt DateTime?
+  // Who produced an outbound message: null = operator, 'ai' | 'away' | 'bulk' | 'forward'
+  origin    String?
+
   conversation Conversation @relation(fields: [conversationId], references: [id])
   reactsTo     Message?     @relation("ReactsTo", fields: [reactsToId], references: [id])
   reactions    Message[]    @relation("ReactsTo")
@@ -192,7 +211,10 @@ model QuickReplyTemplate {
 model ScheduledMessage {
   id             String   @id @default(cuid())
   conversationId String
-  body           String // text content (v1 supports text only)
+  body           String // text content / caption ("" for media without caption)
+  mediaMime      String? // set when a file is scheduled (stored on disk as sched-<id>)
+  mediaName      String?
+  mediaSize      Int?
   replyToId      String? // our Message.id this is a quoted reply to
   scheduledFor   DateTime // when to deliver
   status         String   @default("pending")
@@ -258,4 +280,103 @@ model AuditEvent {
   @@index([userId, createdAt(sort: Desc)])
   @@index([kind, createdAt(sort: Desc)])
   @@map("audit_events")
+}
+
+
+// ===== Settings, labels, saved replies, AI agent, bulk sends =====
+
+/// Key/value app settings (feature flags, away message, AI defaults ...).
+model AppSetting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
+model Label {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("#128C7E")
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  conversations ConversationLabel[]
+
+  @@map("labels")
+}
+
+model ConversationLabel {
+  conversationId String
+  labelId        String
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  label        Label        @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([conversationId, labelId])
+  @@index([labelId])
+  @@map("conversation_labels")
+}
+
+model SavedReply {
+  id        String   @id @default(cuid())
+  shortcut  String   @unique // typed after "/" in the input bar
+  body      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("saved_replies")
+}
+
+/// Per-chat AI agent configuration.
+model AiChatConfig {
+  id               String    @id @default(cuid())
+  conversationId   String    @unique
+  enabled          Boolean   @default(false)
+  mode             String    @default("auto") // 'auto' = sends by itself, 'suggest' = drafts for the operator
+  instructions     String    @default("")
+  customerInfo     String    @default("")
+  rangeType        String    @default("always") // 'always' | 'temporary'
+  activeFrom       DateTime?
+  activeUntil      DateTime?
+  useBusinessHours String    @default("any") // 'any' | 'inside' | 'outside' business hours
+  maxRepliesPerDay Int?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("ai_chat_configs")
+}
+
+model BulkCampaign {
+  id           String   @id @default(cuid())
+  name         String
+  contentSid   String
+  templateName String
+  variables    Json // { "1": "{name}", "2": "fixed text" }
+  status       String   @default("running") // running | done | canceled
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  recipients BulkRecipient[]
+
+  @@map("bulk_campaigns")
+}
+
+model BulkRecipient {
+  id             String    @id @default(cuid())
+  campaignId     String
+  conversationId String
+  status         String    @default("pending") // pending | sending | sent | failed | skipped
+  messageId      String?
+  error          String?
+  sentAt         DateTime?
+
+  campaign     BulkCampaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@map("bulk_recipients")
 }

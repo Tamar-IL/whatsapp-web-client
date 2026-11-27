@@ -10,6 +10,7 @@ import { saveMedia } from '../lib/mediaStore';
 import { queueMediaForWebhook } from '../lib/makeWebhook';
 import { transcribeAudio } from '../lib/transcribe';
 import type { MessageType } from '@prisma/client';
+import { onInboundMessage } from '../lib/automation';
 
 /**
  * Twilio Programmable Messaging webhooks (the spec's §3.6 path).
@@ -262,6 +263,9 @@ async function handleInbound(
 
     return message;
   });
+
+  // Away message + AI agent. Fire-and-forget: never delays the Twilio ack.
+  void onInboundMessage(created.conversationId, Boolean(reaction));
 
   // Pull the actual bytes off Twilio promptly, while the media definitely still
   // exists, and store our own copy. Inbound Twilio media URLs expire (and need

@@ -7,6 +7,8 @@ import { createApp } from './app';
 import { attachSocketIO } from './realtime/io';
 import { bootstrapAdminUser } from './auth/bootstrap';
 import { startScheduler } from './jobs/scheduler';
+import { startBulkWorker } from './api/bulk';
+import { startTemplateWatcher } from './api/templates';
 import { prisma } from './db/prisma';
 
 async function main() {
@@ -34,6 +36,9 @@ async function main() {
   // Deliver scheduled messages when their time comes (in-process; the pg-boss
   // worker is not run in this deployment).
   startScheduler();
+  // Bulk template campaigns and the template-approval watcher run in-process too.
+  startBulkWorker();
+  startTemplateWatcher();
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutting down...');

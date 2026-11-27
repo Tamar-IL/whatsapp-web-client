@@ -19,6 +19,16 @@ publicMediaRouter.get(
     const messageId = verifyMediaToken(req.params.token!);
     if (!messageId) throw new ApiError(403, 'BAD_TOKEN', 'Invalid or expired media token.');
 
+    // Business-profile logo (not a message): stored with its MIME alongside.
+    if (messageId.startsWith('profile-logo-')) {
+      if (!(await mediaExists(messageId))) throw new ApiError(404, 'GONE', 'Media no longer available.');
+      const mime = (await mediaExists(`${messageId}.mime`)) ? (await readMedia(`${messageId}.mime`)).toString() : 'image/jpeg';
+      const buf = await readMedia(messageId);
+      res.setHeader('Content-Type', mime);
+      res.send(buf);
+      return;
+    }
+
     const msg = await prisma.message.findUnique({
       where: { id: messageId },
       select: { mediaMime: true, mediaName: true },
